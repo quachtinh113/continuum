@@ -1,0 +1,1831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NowTrading 2.1 — System Architecture & Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #070a13;
+            --bg-card: #0f1524;
+            --bg-card-hover: #151d30;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.16);
+            --primary: #06b6d4; /* Neon Cyan */
+            --primary-glow: rgba(6, 182, 212, 0.15);
+            --success: #10b981; /* Neon Green */
+            --success-glow: rgba(16, 185, 129, 0.15);
+            --danger: #ef4444; /* Neon Red */
+            --danger-glow: rgba(239, 68, 68, 0.15);
+            --warning: #f59e0b; /* Gold */
+            --warning-glow: rgba(245, 158, 11, 0.15);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --font-sans: 'Plus Jakarta Sans', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+            padding-bottom: 80px;
+        }
+
+        /* Ambient Glow Backgrounds */
+        .ambient-glow {
+            position: absolute;
+            width: 400px;
+            height: 400px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, rgba(7, 10, 19, 0) 70%);
+            z-index: -1;
+            filter: blur(40px);
+        }
+        #glow-1 { top: -100px; left: -100px; }
+        #glow-2 { top: 500px; right: -150px; background: radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, rgba(7, 10, 19, 0) 70%); }
+
+        header {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 24px 20px 24px;
+            border-bottom: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #fff 30%, var(--primary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.03em;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .version-badge {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            background: rgba(6, 182, 212, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            padding: 4px 10px;
+            border-radius: 100px;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 10px 20px;
+            font-family: var(--font-sans);
+            font-weight: 600;
+            font-size: 0.9rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-btn.active {
+            color: #fff;
+            background: rgba(6, 182, 212, 0.2);
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.1);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+        }
+
+        main {
+            max-width: 1400px;
+            margin: 40px auto 0 auto;
+            padding: 0 24px;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.4s ease forwards;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- CARD STYLE (GLASSMORPHISM) --- */
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .glass-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0) 100%);
+        }
+
+        .glass-card:hover {
+            border-color: var(--border-hover);
+        }
+
+        /* --- ARCHITECTURE DIAGRAM TAB --- */
+        .arch-layout {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 28px;
+        }
+
+        @media (max-width: 1100px) {
+            .arch-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .diagram-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .diag-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .diag-title h3 {
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+        
+        .diag-subtitle {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .interactive-svg-wrapper {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.04);
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* SVG Architecture Node styles */
+        .arch-node {
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .arch-node rect {
+            fill: #141b2d;
+            stroke: var(--border-color);
+            stroke-width: 1.5;
+            transition: all 0.3s;
+        }
+
+        .arch-node:hover rect {
+            fill: #1a233a;
+            stroke: var(--primary);
+            filter: drop-shadow(0px 0px 8px rgba(6, 182, 212, 0.4));
+        }
+
+        .arch-node.active rect {
+            fill: rgba(6, 182, 212, 0.1);
+            stroke: var(--primary);
+            stroke-width: 2.5;
+            filter: drop-shadow(0px 0px 12px rgba(6, 182, 212, 0.5));
+        }
+
+        .arch-node text.title {
+            fill: #ffffff;
+            font-family: var(--font-sans);
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .arch-node text.subtitle {
+            fill: var(--text-muted);
+            font-family: var(--font-sans);
+            font-weight: 500;
+            font-size: 11px;
+        }
+
+        .arch-node .node-icon {
+            fill: var(--text-muted);
+            transition: fill 0.3s;
+        }
+
+        .arch-node:hover .node-icon, .arch-node.active .node-icon {
+            fill: var(--primary);
+        }
+
+        .flow-line {
+            fill: none;
+            stroke: rgba(255, 255, 255, 0.08);
+            stroke-width: 2;
+            stroke-dasharray: 6, 6;
+            animation: dash 30s linear infinite;
+        }
+
+        .flow-line.active {
+            stroke: var(--primary);
+            stroke-width: 2.5;
+            filter: drop-shadow(0 0 4px var(--primary));
+        }
+
+        .flow-line.veto {
+            stroke: var(--danger);
+        }
+
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -1000;
+            }
+        }
+
+        .detail-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .spec-item {
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 14px;
+        }
+
+        .spec-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .spec-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .spec-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .spec-value.code {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            background: rgba(255,255,255,0.04);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .badge-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .rule-badge {
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 2px 8px;
+            border-radius: 6px;
+            color: var(--text-main);
+        }
+
+        .rule-badge.highlight {
+            background: rgba(6, 182, 212, 0.08);
+            border-color: rgba(6, 182, 212, 0.2);
+            color: var(--primary);
+        }
+
+        /* --- PLAYGROUND TAB --- */
+        .playground-layout {
+            display: grid;
+            grid-template-columns: 420px 1fr;
+            gap: 28px;
+        }
+
+        @media (max-width: 1000px) {
+            .playground-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .controls-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .control-label {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text-main);
+        }
+
+        .control-value {
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--primary);
+            background: rgba(6, 182, 212, 0.08);
+            padding: 2px 8px;
+            border-radius: 6px;
+        }
+
+        .slider-input {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 100px;
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+            cursor: pointer;
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            border: 2px solid var(--primary);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.5);
+            transition: transform 0.1s;
+        }
+
+        .slider-input::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .select-input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            padding: 10px 12px;
+            border-radius: 8px;
+            outline: none;
+            font-family: var(--font-sans);
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        .select-input:focus {
+            border-color: var(--primary);
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 5px;
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            border-radius: 10px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .checkbox-container:hover {
+            background: rgba(255,255,255,0.04);
+            border-color: var(--border-hover);
+        }
+
+        .checkbox-container input {
+            display: none;
+        }
+
+        .checkbox-box {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--text-muted);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .checkbox-container input:checked + .checkbox-box {
+            border-color: var(--primary);
+            background: var(--primary);
+        }
+
+        .checkbox-box::after {
+            content: '✓';
+            color: #070a13;
+            font-weight: 800;
+            font-size: 11px;
+            display: none;
+        }
+
+        .checkbox-container input:checked + .checkbox-box::after {
+            display: block;
+        }
+
+        .checkbox-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .sim-results-container {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .sim-status-banner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 14px;
+            padding: 18px 24px;
+            border-width: 1px;
+            border-style: solid;
+        }
+
+        .sim-status-banner.hold {
+            background: rgba(255, 255, 255, 0.02);
+            border-color: var(--border-color);
+        }
+        .sim-status-banner.buy {
+            background: rgba(16, 185, 129, 0.08);
+            border-color: rgba(16, 185, 129, 0.2);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.05);
+        }
+        .sim-status-banner.sell {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.2);
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.05);
+        }
+
+        .status-main {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .status-dot.hold { background-color: var(--text-muted); }
+        .status-dot.buy { background-color: var(--success); box-shadow: 0 0 10px var(--success); }
+        .status-dot.sell { background-color: var(--danger); box-shadow: 0 0 10px var(--danger); }
+
+        .status-dot::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            border-radius: 50%;
+            border: 2px solid currentColor;
+            opacity: 0.4;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.4; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+
+        .status-text h4 {
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: -0.01em;
+        }
+        .status-text p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .action-output {
+            font-family: var(--font-mono);
+            font-size: 1.1rem;
+            font-weight: 700;
+            padding: 8px 16px;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+        }
+
+        .action-output.buy { color: var(--success); border-color: rgba(16, 185, 129, 0.2); }
+        .action-output.sell { color: var(--danger); border-color: rgba(239, 68, 68, 0.2); }
+        .action-output.skip { color: var(--text-muted); }
+
+        .eval-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        @media (max-width: 600px) {
+            .eval-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .eval-step-card {
+            background: rgba(255,255,255,0.01);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 18px;
+        }
+
+        .eval-step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        .eval-step-title {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            color: var(--text-muted);
+        }
+
+        .eval-badge {
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+        }
+
+        .eval-badge.pass { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .eval-badge.fail { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        .eval-badge.warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+        .eval-badge.neutral { background: rgba(255,255,255,0.05); color: var(--text-muted); }
+
+        .eval-details {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .eval-detail-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+        }
+
+        .eval-lbl {
+            color: var(--text-muted);
+        }
+
+        .eval-val {
+            font-weight: 600;
+        }
+
+        .eval-explanation {
+            font-size: 0.85rem;
+            background: rgba(0, 0, 0, 0.15);
+            border-left: 3px solid var(--primary);
+            padding: 12px 16px;
+            border-radius: 0 8px 8px 0;
+            color: var(--text-muted);
+        }
+
+        /* --- AUDIT INSPECTOR TAB --- */
+        .inspector-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .dropzone-container {
+            border: 2px dashed rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.01);
+            border-radius: 14px;
+            padding: 36px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .dropzone-container:hover, .dropzone-container.dragover {
+            border-color: var(--primary);
+            background: rgba(6, 182, 212, 0.02);
+        }
+
+        .dropzone-icon {
+            font-size: 2.2rem;
+            color: var(--text-muted);
+        }
+
+        .dropzone-text h4 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .dropzone-text p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .filters-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            background: rgba(0,0,0,0.15);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            border-radius: 12px;
+            align-items: center;
+        }
+
+        .filter-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .filter-item label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.05em;
+        }
+
+        .filter-select {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            outline: none;
+            font-size: 0.85rem;
+            min-width: 140px;
+        }
+
+        .filter-select:focus {
+            border-color: var(--primary);
+        }
+
+        .log-table-wrapper {
+            max-height: 500px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.1);
+        }
+
+        table.log-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.85rem;
+        }
+
+        table.log-table th {
+            background: var(--bg-card);
+            color: var(--text-muted);
+            font-weight: 700;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        table.log-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            white-space: nowrap;
+        }
+
+        table.log-table tr:hover {
+            background: rgba(255,255,255,0.02);
+            cursor: pointer;
+        }
+
+        .sev-tag {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .sev-tag.info { background: rgba(6, 182, 212, 0.1); color: var(--primary); }
+        .sev-tag.warning { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+        .sev-tag.critical { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+        .sev-tag.fatal { background: #ef4444; color: #fff; }
+
+        .sig-tag {
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .sig-tag.buy { background: rgba(16, 185, 129, 0.1); color: var(--success); }
+        .sig-tag.sell { background: rgba(239, 68, 68, 0.1); color: var(--danger); }
+        .sig-tag.hold { background: rgba(255,255,255,0.05); color: var(--text-muted); }
+
+        .inspector-placeholder {
+            padding: 60px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Modal styling */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            max-width: 600px;
+            width: 100%;
+            padding: 24px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+            position: relative;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .modal-header h4 {
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.4rem;
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            color: #fff;
+        }
+
+        .json-viewer {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            padding: 16px;
+            border-radius: 10px;
+            max-height: 350px;
+            overflow-y: auto;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            white-space: pre-wrap;
+            color: #38bdf8;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="ambient-glow" id="glow-1"></div>
+    <div class="ambient-glow" id="glow-2"></div>
+
+    <header>
+        <div class="header-container">
+            <div>
+                <h1>NowTrading 2.1 <span class="version-badge">QUANT CORE</span></h1>
+                <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;">Interactive Architecture Documentation & Strategy Visualizer</p>
+            </div>
+            <div class="nav-tabs">
+                <button class="tab-btn active" onclick="switchTab('arch')">Architecture Flow</button>
+                <button class="tab-btn" onclick="switchTab('playground')">Strategy Playground</button>
+                <button class="tab-btn" onclick="switchTab('inspector')">Audit Log Inspector</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- TAB 1: ARCHITECTURE FLOW -->
+        <div id="tab-arch" class="tab-content active">
+            <div class="arch-layout">
+                <div class="diagram-container">
+                    <div class="glass-card">
+                        <div class="diag-header">
+                            <div class="diag-title">
+                                <h3>Data Execution Sequence</h3>
+                                <div class="diag-subtitle">Click on any module node to inspect its internal logic, input/output structures, and constitutional rules.</div>
+                            </div>
+                        </div>
+
+                        <div class="interactive-svg-wrapper">
+                            <!-- SVG Sequence Diagram -->
+                            <svg width="740" height="420" viewBox="0 0 740 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <!-- Connection Lines -->
+                                <path id="line-1" class="flow-line active" d="M120 70 H 220" />
+                                <path id="line-2" class="flow-line active" d="M300 70 H 400" />
+                                <path id="line-3" class="flow-line active" d="M480 70 V 150" />
+                                <path id="line-4" class="flow-line active" d="M480 210 H 300" />
+                                <path id="line-5" class="flow-line active" d="M220 210 H 120" />
+                                <path id="line-6" class="flow-line active" d="M120 270 V 350" />
+                                <path id="line-7" class="flow-line active" d="M120 380 H 220" />
+                                
+                                <!-- MT5 Terminal (Start) -->
+                                <g class="arch-node active" id="node-mt5" onclick="selectNode('mt5')">
+                                    <rect x="20" y="30" width="100" height="80" rx="10" />
+                                    <text x="70" y="65" text-anchor="middle" class="title">MT5 API</text>
+                                    <text x="70" y="82" text-anchor="middle" class="subtitle">Connector</text>
+                                    <!-- Icon placeholder -->
+                                    <path class="node-icon" d="M70 42 L76 50 H64 Z" />
+                                </g>
+
+                                <!-- MTF RSI Builder -->
+                                <g class="arch-node" id="node-rsi" onclick="selectNode('rsi')">
+                                    <rect x="220" y="30" width="80" height="80" rx="10" />
+                                    <text x="260" y="65" text-anchor="middle" class="title">MTF RSI</text>
+                                    <text x="260" y="82" text-anchor="middle" class="subtitle">Builder</text>
+                                </g>
+
+                                <!-- Regime Engine -->
+                                <g class="arch-node" id="node-regime" onclick="selectNode('regime')">
+                                    <rect x="400" y="30" width="80" height="80" rx="10" />
+                                    <text x="440" y="65" text-anchor="middle" class="title">Regime</text>
+                                    <text x="440" y="82" text-anchor="middle" class="subtitle">Engine</text>
+                                </g>
+
+                                <!-- Signal Engine -->
+                                <g class="arch-node" id="node-signal" onclick="selectNode('signal')">
+                                    <rect x="440" y="150" width="80" height="80" rx="10" />
+                                    <text x="480" y="185" text-anchor="middle" class="title">Signal</text>
+                                    <text x="480" y="202" text-anchor="middle" class="subtitle">Engine</text>
+                                </g>
+
+                                <!-- Hourly Gate -->
+                                <g class="arch-node" id="node-gate" onclick="selectNode('gate')">
+                                    <rect x="300" y="170" width="80" height="80" rx="10" />
+                                    <text x="340" y="205" text-anchor="middle" class="title">Hourly</text>
+                                    <text x="340" y="222" text-anchor="middle" class="subtitle">Gate</text>
+                                </g>
+
+                                <!-- Risk Engine -->
+                                <g class="arch-node" id="node-risk" onclick="selectNode('risk')">
+                                    <rect x="120" y="170" width="100" height="100" rx="10" />
+                                    <text x="170" y="215" text-anchor="middle" class="title" fill="#ef4444">Risk Engine</text>
+                                    <text x="170" y="232" text-anchor="middle" class="subtitle">Final Veto</text>
+                                </g>
+
+                                <!-- Trade Cycle Manager -->
+                                <g class="arch-node" id="node-trade" onclick="selectNode('trade')">
+                                    <rect x="20" y="350" width="100" height="50" rx="10" />
+                                    <text x="70" y="380" text-anchor="middle" class="title">Cycle Mgr</text>
+                                </g>
+
+                                <!-- ATR DCA Engine -->
+                                <g class="arch-node" id="node-dca" onclick="selectNode('dca')">
+                                    <rect x="220" y="350" width="80" height="50" rx="10" />
+                                    <text x="260" y="380" text-anchor="middle" class="title">DCA Eng</text>
+                                </g>
+
+                                <!-- Audit Logger -->
+                                <g class="arch-node" id="node-audit" onclick="selectNode('audit')">
+                                    <rect x="400" y="330" width="120" height="70" rx="10" />
+                                    <text x="460" y="365" text-anchor="middle" class="title">Audit Logger</text>
+                                    <text x="460" y="382" text-anchor="middle" class="subtitle">JSONL Output</text>
+                                </g>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-panel">
+                    <div class="glass-card" style="min-height: 480px;">
+                        <h3 id="panel-title" style="font-size: 1.25rem; font-weight: 800; margin-bottom: 18px; color: var(--primary);">MT5 API Connector</h3>
+                        
+                        <div class="spec-item">
+                            <div class="spec-label">Responsibilities</div>
+                            <div id="panel-resp" class="spec-value">Establishes real-time connection to MetaTrader 5 terminal, polls symbols bid/ask/spread, retrieves historical candles, and submits market order deals.</div>
+                        </div>
+
+                        <div class="spec-item">
+                            <div class="spec-label">File Path</div>
+                            <div id="panel-file" class="spec-value code">src/mt5_connector.py</div>
+                        </div>
+
+                        <div class="spec-item">
+                            <div class="spec-label">Inputs</div>
+                            <div id="panel-inputs" class="spec-value">Credentials (account, password, server) from .env</div>
+                        </div>
+
+                        <div class="spec-item">
+                            <div class="spec-label">Outputs</div>
+                            <div id="panel-outputs" class="spec-value">Dataframes with raw OHLC rates, float tick values.</div>
+                        </div>
+
+                        <div class="spec-item">
+                            <div class="spec-label">Constitutional Rules</div>
+                            <div class="badge-list" id="panel-rules">
+                                <span class="rule-badge highlight">Dry Run support</span>
+                                <span class="rule-badge">Tick Age &lt; 120s</span>
+                                <span class="rule-badge">Symbol Select</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: STRATEGY PLAYGROUND -->
+        <div id="tab-playground" class="tab-content">
+            <div class="playground-layout">
+                <div class="glass-card controls-grid">
+                    <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px;">Market Conditions Simulator</h3>
+                    
+                    <div class="control-group">
+                        <label class="control-label">Symbol Under Evaluation</label>
+                        <select id="sim-symbol" class="select-input" onchange="runSimulation()">
+                            <option value="EURUSD">EURUSD (FX Majors, Limit: 5 pips)</option>
+                            <option value="US30">US30 (Index, Limit: 500 pips)</option>
+                            <option value="US100">US100 (Index, Limit: 500 pips)</option>
+                            <option value="US500">US500 (Index, Limit: 500 pips)</option>
+                            <option value="XAUUSD">XAUUSD (Gold, Limit: 50 pips)</option>
+                            <option value="BTCUSD">BTCUSD (Crypto, Limit: 2000 pips)</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label class="control-label">RSI H4 (Trend direction)</label>
+                            <span id="val-rsi-h4" class="control-value">60.0</span>
+                        </div>
+                        <input id="sim-rsi-h4" type="range" class="slider-input" min="0" max="100" step="0.5" value="60" oninput="updateSliderVal('rsi-h4'); runSimulation()">
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label class="control-label">RSI H1 (Trend confirmation)</label>
+                            <span id="val-rsi-h1" class="control-value">58.0</span>
+                        </div>
+                        <input id="sim-rsi-h1" type="range" class="slider-input" min="0" max="100" step="0.5" value="58" oninput="updateSliderVal('rsi-h1'); runSimulation()">
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label class="control-label">RSI M15 (Trigger line)</label>
+                            <span id="val-rsi-m15" class="control-value">56.0</span>
+                        </div>
+                        <input id="sim-rsi-m15" type="range" class="slider-input" min="0" max="100" step="0.5" value="56" oninput="updateSliderVal('rsi-m15'); runSimulation()">
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label class="control-label">ADX H1 (Regime filter)</label>
+                            <span id="val-adx" class="control-value">30.0</span>
+                        </div>
+                        <input id="sim-adx" type="range" class="slider-input" min="0" max="100" step="0.5" value="30" oninput="updateSliderVal('adx'); runSimulation()">
+                    </div>
+
+                    <div class="control-group">
+                        <div class="control-header">
+                            <label class="control-label">Current Spread (Pips)</label>
+                            <span id="val-spread" class="control-value">2.0</span>
+                        </div>
+                        <input id="sim-spread" type="range" class="slider-input" min="0" max="600" step="0.5" value="2.0" oninput="updateSliderVal('spread'); runSimulation()">
+                    </div>
+
+                    <div class="control-group">
+                        <label class="control-label">M15 Pullback Conditions</label>
+                        <div class="checkbox-group">
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="sim-rsi-rising" checked onchange="runSimulation()">
+                                <span class="checkbox-box"></span>
+                                <span class="checkbox-label">M15 RSI Rising</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="sim-close-rising" checked onchange="runSimulation()">
+                                <span class="checkbox-box"></span>
+                                <span class="checkbox-label">M15 Close Rising</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="sim-fresh-low" onchange="runSimulation()">
+                                <span class="checkbox-box"></span>
+                                <span class="checkbox-label">Fresh Local Low</span>
+                            </label>
+                            <label class="checkbox-container">
+                                <input type="checkbox" id="sim-strict-pullback" onchange="runSimulation()">
+                                <span class="checkbox-box"></span>
+                                <span class="checkbox-label">Strict Exhaustion</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sim-results-container">
+                    <!-- Overall Status Banner -->
+                    <div id="sim-banner" class="sim-status-banner hold">
+                        <div class="status-main">
+                            <div id="sim-dot" class="status-dot hold"></div>
+                            <div class="status-text">
+                                <h4 id="sim-res-action-txt">NO TRADE (HOLD)</h4>
+                                <p id="sim-res-reason">Evaluating market parameters...</p>
+                            </div>
+                        </div>
+                        <div id="sim-res-action-badge" class="action-output skip">SKIP</div>
+                    </div>
+
+                    <!-- Flow Steps Visualizer -->
+                    <div class="eval-grid">
+                        <!-- Step 1: Regime -->
+                        <div class="eval-step-card">
+                            <div class="eval-step-header">
+                                <span class="eval-step-title">1. Market Regime</span>
+                                <span id="badge-regime" class="eval-badge pass">TREND</span>
+                            </div>
+                            <div class="eval-details">
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">ADX Value:</span>
+                                    <span id="lbl-adx" class="eval-val">30.0</span>
+                                </div>
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">Status:</span>
+                                    <span id="lbl-regime-status" class="eval-val">TRENDING (OK)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Signal -->
+                        <div class="eval-step-card">
+                            <div class="eval-step-header">
+                                <span class="eval-step-title">2. Signal Engine</span>
+                                <span id="badge-signal" class="eval-badge pass">BUY</span>
+                            </div>
+                            <div class="eval-details">
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">Trend filter:</span>
+                                    <span id="lbl-trend" class="eval-val">Bullish</span>
+                                </div>
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">Exhaustion:</span>
+                                    <span id="lbl-exhaustion" class="eval-val">Confirmed</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: Risk Veto -->
+                        <div class="eval-step-card">
+                            <div class="eval-step-header">
+                                <span class="eval-step-title">3. Risk Engine</span>
+                                <span id="badge-risk" class="eval-badge pass">APPROVED</span>
+                            </div>
+                            <div class="eval-details">
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">Spread Check:</span>
+                                    <span id="lbl-spread" class="eval-val">OK</span>
+                                </div>
+                                <div class="eval-detail-row">
+                                    <span class="eval-lbl">Veto Action:</span>
+                                    <span id="lbl-veto" class="eval-val">None</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass-card">
+                        <h4 style="font-weight: 700; font-size: 1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <span style="color: var(--primary);">✦</span> Real-time Strategy Evaluation Path
+                        </h4>
+                        <div id="sim-path-explanation" class="eval-explanation">
+                            ADX is 30.0 (>= 25), indicating a strong trend, so the Trend Strategy is fully enabled. The multi-timeframe RSI trend check is Bullish (RSI H4 > 53 and RSI H1 > 53). Trigger RSI M15 is 56.0 (> 50). Pullback exhaustion is confirmed because M15 RSI is rising, close is rising, and no fresh local low exists. Spread of 2.0 pips is well below the symbol's threshold of 5.0 pips. The trade is APPROVED.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: AUDIT INSPECTOR -->
+        <div id="tab-inspector" class="tab-content">
+            <div class="inspector-layout">
+                <!-- Dropzone -->
+                <div id="dropzone" class="dropzone-container" onclick="document.getElementById('file-input').click()">
+                    <input type="file" id="file-input" style="display: none;" accept=".jsonl" onchange="handleFileSelect(event)">
+                    <div class="dropzone-icon">📁</div>
+                    <div class="dropzone-text">
+                        <h4>Load Audit Log File</h4>
+                        <p>Drag & drop today's <code>audit_YYYY-MM-DD.jsonl</code> file here, or click to browse files.</p>
+                    </div>
+                </div>
+
+                <div class="filters-container">
+                    <div class="filter-item">
+                        <label>Symbol</label>
+                        <select id="filter-symbol" class="filter-select" onchange="applyFilters()">
+                            <option value="ALL">All Symbols</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label>Severity</label>
+                        <select id="filter-severity" class="filter-select" onchange="applyFilters()">
+                            <option value="ALL">All Severities</option>
+                            <option value="INFO">INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="CRITICAL">CRITICAL</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label>Signal</label>
+                        <select id="filter-signal" class="filter-select" onchange="applyFilters()">
+                            <option value="ALL">All Signals</option>
+                            <option value="BUY">BUY</option>
+                            <option value="SELL">SELL</option>
+                            <option value="HOLD">HOLD</option>
+                        </select>
+                    </div>
+                    <div class="filter-item">
+                        <label>Action</label>
+                        <select id="filter-action" class="filter-select" onchange="applyFilters()">
+                            <option value="ALL">All Actions</option>
+                            <option value="OPEN">OPEN (BUY/SELL)</option>
+                            <option value="DCA">DCA (BUY/SELL)</option>
+                            <option value="BLOCKED">BLOCKED</option>
+                            <option value="SKIP">SKIP</option>
+                        </select>
+                    </div>
+                    <div style="margin-left: auto; font-size: 0.8rem; color: var(--text-muted); font-weight: 600;" id="log-count">
+                        Records: 0
+                    </div>
+                </div>
+
+                <div class="log-table-wrapper">
+                    <table class="log-table" id="log-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Severity</th>
+                                <th>Symbol</th>
+                                <th>Session</th>
+                                <th>RSI H4/H1/M15</th>
+                                <th>ADX</th>
+                                <th>ATR</th>
+                                <th>Signal</th>
+                                <th>Risk Decision</th>
+                                <th>Execution Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="log-table-body">
+                            <!-- Rows dynamically populated -->
+                        </tbody>
+                    </table>
+                    <div id="inspector-placeholder" class="inspector-placeholder">
+                        No log file loaded. Drag & drop a JSONL log file from the <code>logs/</code> directory.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Detail View Modal -->
+    <div id="log-modal" class="modal" onclick="closeModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h4 id="modal-title">Log Record Detail</h4>
+                <button class="modal-close" onclick="document.getElementById('log-modal').style.display='none'">&times;</button>
+            </div>
+            <div class="json-viewer" id="modal-json">
+                <!-- JSON display -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- NODE DATA FOR ARCHITECTURE FLOW ---
+        const nodeInfo = {
+            mt5: {
+                title: "MT5 API Connector",
+                resp: "Establishes live TCP connection to MetaTrader 5 terminal using the MT5 Python library. Responsible for fetching rates (historical bars), retrieving tick values (ask, bid, spread) and sending market order deals in LIVE or DRY_RUN mode.",
+                file: "src/mt5_connector.py",
+                inputs: "Settings (.env): MT5_ACCOUNT, MT5_PASSWORD, MT5_SERVER, MT5_PATH, LIVE_TRADING.",
+                outputs: "Pandas DataFrames for copy_rates, tick dictionaries (bid, ask, spread_pips, time), order tickets.",
+                rules: [
+                    "Supports DRY_RUN mode (logs deals without placing real orders)",
+                    "Validates connection state before any request",
+                    "Performs order execution with IOC (Immediate or Cancel) filling"
+                ]
+            },
+            rsi: {
+                title: "MTF RSI Builder",
+                resp: "Requests historical candle data (H4, H1, M15 timeframes) from the MT5 Connector. Computes RSI for H4, H1, M15, as well as ADX (H1) and ATR (H1/M15) using pandas-ta.",
+                file: "src/mtf_rsi_builder.py",
+                inputs: "Rates from MT5Connector (50 bars min). Settings: RSI_PERIOD (14), ADX_PERIOD (14), ATR_PERIOD (14), PULLBACK_LOOKBACK_BARS (5).",
+                outputs: "Indicators Dictionary containing: RSI_H4, RSI_H1, RSI_M15, ADX, ATR, ATR_M15, and pullback boolean features.",
+                rules: [
+                    "Rejects inputs with NaN or missing indicators",
+                    "Checks rates age (rejects if data is older than 5 minutes)",
+                    "Computes pullback features (RSI slope, close price slope, and local extreme comparisons)"
+                ]
+            },
+            regime: {
+                title: "Market Regime Engine",
+                resp: "Analyzes ADX value (from H1 timeframe) to classify the market state into one of three regimes: RANGE, TRANSITION, or TREND.",
+                file: "src/regime_engine.py",
+                inputs: "H1 ADX indicator.",
+                outputs: "MarketRegime Enum (RANGE, TRANSITION, TREND).",
+                rules: [
+                    "RANGE (ADX < 18): Mean reversion mode",
+                    "TRANSITION (18 <= ADX < 25): Vetoes opening new trades, permits managing current cycle only",
+                    "TREND (ADX >= 25): Permits opening new trades, fully enables main strategy"
+                ]
+            },
+            signal: {
+                title: "Signal Engine",
+                resp: "Evaluates multi-timeframe RSI, ADX, and pullback variables to generate BUY, SELL, or HOLD signals according to the strategy rules.",
+                file: "src/signal_engine.py",
+                inputs: "Indicators Dictionary (RSI_H4, RSI_H1, RSI_M15, ADX) and pullback booleans.",
+                outputs: "Signal Enum (BUY, SELL, HOLD), signal reason string.",
+                rules: [
+                    "BUY: RSI_H4 > 53 AND RSI_H1 > 53 (Trend) -> RSI_M15 > 50 AND Pullback Exhaustion confirmed",
+                    "SELL: RSI_H4 < 47 AND RSI_H1 < 47 (Trend) -> RSI_M15 < 50 AND Pullback Exhaustion confirmed",
+                    "Pullback Exhaustion (BUY): M15 RSI rising, Close price rising (if strict), no fresh local low",
+                    "Pullback Exhaustion (SELL): M15 RSI falling, Close price falling (if strict), no fresh local high"
+                ]
+            },
+            gate: {
+                title: "Hourly Entry Gate",
+                resp: "Protects against overtrading by limiting frequency of new trade cycle entries per symbol.",
+                file: "src/hourly_gate.py",
+                inputs: "Symbol, trade timestamps.",
+                outputs: "Boolean (gate open/closed), reason string.",
+                rules: [
+                    "Maximum 1 trade cycle per symbol per hour",
+                    "Cooldown of 60 seconds between trades",
+                    "Blocks trade placement during the first minute of each hour to avoid volatile bar-open spreads",
+                    "Allows CPI, NFP, FOMC exceptions if Emergency Event Mode is enabled"
+                ]
+            },
+            risk: {
+                title: "Risk Engine",
+                resp: "Acts as the final veto authority before any trade is opened or a DCA order is submitted. Evaluates spread, data quality, drawdown, symbol exposure, and portfolio limits.",
+                file: "src/risk_engine.py",
+                inputs: "Symbol, indicators dictionary, spread pips, data age, current open cycles.",
+                outputs: "RiskDecision object (approved boolean, veto code, reason, severity).",
+                rules: [
+                    "Vetoes if tick data is older than 120 seconds",
+                    "Vetoes if current symbol spread exceeds the category threshold (FX=5, INDEX=500, GOLD=50, CRYPTO=2000)",
+                    "Vetoes if max daily drawdown ($50) is reached",
+                    "Vetoes if portfolio has reached maximum concurrent cycles (5)"
+                ]
+            },
+            trade: {
+                title: "Trade Cycle Manager",
+                resp: "Maintains active trade cycles. Evaluates exit and holding rules on every iteration of the bot loop.",
+                file: "src/trade_cycle_manager.py",
+                inputs: "Trade cycles state, current price feed, elapsed holding hours.",
+                outputs: "Action Enums (CLOSE_PROFIT, REDUCE_DCA, CUT_ALL, FORCE_CLOSE, HOLD).",
+                rules: [
+                    "Profit Rule: If holding > 1 hour and profit > $5, close all positions",
+                    "12-Hour Rule: If holding > 12 hours and profit <= $0, review ADX; either cut all or reduce/freeze DCA",
+                    "24-Hour Rule: If holding > 24 hours and profit <= $0, force close all positions immediately"
+                ]
+            },
+            dca: {
+                title: "ATR DCA Engine",
+                resp: "Decides whether to average down (DCA) an active trade cycle, calculating volume and price spacing using ATR.",
+                file: "src/atr_dca_engine.py",
+                inputs: "Active trade cycle, current price feed, indicators dictionary.",
+                outputs: "Boolean (should DCA), reason string, lot size.",
+                rules: [
+                    "Limits DCA to a maximum of 3 layers",
+                    "DCA spacing tiers: Layer 1 = 1.0 * ATR, Layer 2 = 1.5 * ATR, Layer 3 = 2.0 * ATR below/above average entry",
+                    "Kills DCA if RSI reverses (BUY reverses below 47, SELL reverses above 53) or ADX collapses below 18"
+                ]
+            },
+            audit: {
+                title: "Audit Logger",
+                resp: "Maintains absolute traceability for every single bot evaluation. Writes JSONL logs and outputs formatted warnings to the console.",
+                file: "src/audit_logger.py",
+                inputs: "Timestamp, indicators, signal, risk decision, execution action, reasons.",
+                outputs: "Daily logs in `logs/audit_YYYY-MM-DD.jsonl`.",
+                rules: [
+                    "Constitution §20: 'No log = invalid decision'",
+                    "Separates severities: INFO (normal), WARNING (missing data), CRITICAL (vetoes), FATAL (non-audit trade)"
+                ]
+            }
+        };
+
+        function selectNode(nodeId) {
+            // Remove active classes
+            document.querySelectorAll('.arch-node').forEach(node => {
+                node.classList.remove('active');
+            });
+            
+            // Add active class to clicked node
+            const selectedNode = document.getElementById(`node-${nodeId}`);
+            if (selectedNode) selectedNode.classList.add('active');
+
+            // Populate panel
+            const data = nodeInfo[nodeId];
+            document.getElementById('panel-title').innerText = data.title;
+            document.getElementById('panel-resp').innerText = data.resp;
+            document.getElementById('panel-file').innerText = data.file;
+            document.getElementById('panel-inputs').innerText = data.inputs;
+            document.getElementById('panel-outputs').innerText = data.outputs;
+
+            // Populate rules
+            const rulesContainer = document.getElementById('panel-rules');
+            rulesContainer.innerHTML = '';
+            data.rules.forEach((rule, idx) => {
+                const badge = document.createElement('span');
+                badge.className = 'rule-badge' + (idx === 0 ? ' highlight' : '');
+                badge.innerText = rule;
+                rulesContainer.appendChild(badge);
+            });
+
+            // Update SVG lines highlights
+            updateFlowLines(nodeId);
+        }
+
+        function updateFlowLines(nodeId) {
+            // Reset all lines to neutral active/inactive
+            document.querySelectorAll('.flow-line').forEach(line => {
+                line.className.baseVal = "flow-line active";
+            });
+
+            if (nodeId === 'risk') {
+                document.getElementById('line-5').className.baseVal = "flow-line active veto";
+            }
+        }
+
+        // --- TAB SWITCHER ---
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            event.target.classList.add('active');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+
+            if (tabId === 'playground') {
+                runSimulation();
+            }
+        }
+
+        // --- STRATEGY PLAYGROUND SIMULATOR ---
+        function updateSliderVal(sliderId) {
+            const val = document.getElementById(`sim-${sliderId}`).value;
+            document.getElementById(`val-${sliderId}`).innerText = val;
+        }
+
+        const SPREAD_LIMITS = {
+            EURUSD: 5.0,
+            US30: 500.0,
+            US100: 500.0,
+            US500: 500.0,
+            XAUUSD: 50.0,
+            BTCUSD: 2000.0
+        };
+
+        function runSimulation() {
+            // Fetch inputs
+            const symbol = document.getElementById('sim-symbol').value;
+            const rsiH4 = parseFloat(document.getElementById('sim-rsi-h4').value);
+            const rsiH1 = parseFloat(document.getElementById('sim-rsi-h1').value);
+            const rsiM15 = parseFloat(document.getElementById('sim-rsi-m15').value);
+            const adx = parseFloat(document.getElementById('sim-adx').value);
+            const spread = parseFloat(document.getElementById('sim-spread').value);
+            
+            const m15RsiRising = document.getElementById('sim-rsi-rising').checked;
+            const m15CloseRising = document.getElementById('sim-close-rising').checked;
+            const m15FreshLow = document.getElementById('sim-fresh-low').checked;
+            const strictExhaustion = document.getElementById('sim-strict-pullback').checked;
+
+            // 1. Regime Calculation
+            let regime = "UNKNOWN";
+            let regimeStatus = "Blocked";
+            let regimePass = false;
+            let regimeBadgeClass = "fail";
+
+            if (adx < 18) {
+                regime = "RANGE";
+                regimeStatus = "RANGE (OK for Mean Reversion)";
+                regimePass = true;
+                regimeBadgeClass = "pass";
+            } else if (adx >= 18 && adx < 25) {
+                regime = "TRANSITION";
+                regimeStatus = "TRANSITION (Blocked Entries)";
+                regimePass = false;
+                regimeBadgeClass = "fail";
+            } else {
+                regime = "TREND";
+                regimeStatus = "TRENDING (OK)";
+                regimePass = true;
+                regimeBadgeClass = "pass";
+            }
+
+            document.getElementById('badge-regime').innerText = regime;
+            document.getElementById('badge-regime').className = `eval-badge ${regimeBadgeClass}`;
+            document.getElementById('lbl-adx').innerText = adx.toFixed(1);
+            document.getElementById('lbl-regime-status').innerText = regimeStatus;
+
+            // 2. Signal Evaluation
+            let signal = "HOLD";
+            let trendType = "Neutral";
+            let exhaustionConfirmed = false;
+            let signalBadgeClass = "neutral";
+            let signalExplanation = "HOLD: Trend RSI not aligned or pullback not exhausted.";
+
+            const rsiBuyThreshold = 53.0;
+            const rsiSellThreshold = 47.0;
+
+            const isBullishTrend = (rsiH4 > rsiBuyThreshold) && (rsiH1 > rsiBuyThreshold);
+            const isBearishTrend = (rsiH4 < rsiSellThreshold) && (rsiH1 < rsiSellThreshold);
+
+            if (isBullishTrend) {
+                trendType = "Bullish";
+                const trigger = rsiM15 > 50.0;
+                let exhaustion = false;
+                if (strictExhaustion) {
+                    exhaustion = m15RsiRising && m15CloseRising && !m15FreshLow;
+                } else {
+                    exhaustion = m15RsiRising && !m15FreshLow;
+                }
+                
+                exhaustionConfirmed = exhaustion;
+
+                if (trigger && exhaustion) {
+                    signal = "BUY";
+                    signalBadgeClass = "pass";
+                    signalExplanation = `BUY: Trend bullish, M15 trigger (${rsiM15.toFixed(1)} > 50), and pullback exhaustion confirmed.`;
+                } else {
+                    signalExplanation = `HOLD: Bullish trend, but M15 trigger or pullback exhaustion not met.`;
+                }
+            } else if (isBearishTrend) {
+                trendType = "Bearish";
+                const trigger = rsiM15 < 50.0;
+                let exhaustion = false;
+                if (strictExhaustion) {
+                    exhaustion = !m15RsiRising && !m15CloseRising && m15FreshLow; // Fresh High is mapped to Fresh Low inverted in this simplified simulator
+                } else {
+                    exhaustion = !m15RsiRising && m15FreshLow;
+                }
+
+                exhaustionConfirmed = exhaustion;
+
+                if (trigger && exhaustion) {
+                    signal = "SELL";
+                    signalBadgeClass = "pass";
+                    signalExplanation = `SELL: Trend bearish, M15 trigger (${rsiM15.toFixed(1)} < 50), and pullback exhaustion confirmed.`;
+                } else {
+                    signalExplanation = `HOLD: Bearish trend, but M15 trigger or pullback exhaustion not met.`;
+                }
+            } else {
+                signalExplanation = `HOLD: RSI H4/H1 in neutral zone (${rsiH4.toFixed(1)} / ${rsiH1.toFixed(1)}). No clear trend.`;
+            }
+
+            document.getElementById('badge-signal').innerText = signal;
+            document.getElementById('badge-signal').className = `eval-badge ${signalBadgeClass}`;
+            document.getElementById('lbl-trend').innerText = trendType;
+            document.getElementById('lbl-exhaustion').innerText = exhaustionConfirmed ? "Confirmed" : "Not Met";
+
+            // 3. Risk Veto
+            const spreadLimit = SPREAD_LIMITS[symbol];
+            const isSpreadOk = spread <= spreadLimit;
+            let riskDecision = "APPROVED";
+            let riskBadgeClass = "pass";
+            let vetoReason = "None";
+
+            if (!isSpreadOk) {
+                riskDecision = "VETOED";
+                riskBadgeClass = "fail";
+                vetoReason = `SPREAD_HIGH (${spread.toFixed(1)} > ${spreadLimit.toFixed(1)} pips)`;
+            }
+
+            document.getElementById('badge-risk').innerText = riskDecision;
+            document.getElementById('badge-risk').className = `eval-badge ${riskBadgeClass}`;
+            document.getElementById('lbl-spread').innerText = isSpreadOk ? "OK" : "Too High";
+            document.getElementById('lbl-veto').innerText = vetoReason;
+
+            // 4. Overall Decision
+            const simBanner = document.getElementById('sim-banner');
+            const simDot = document.getElementById('sim-dot');
+            const actionText = document.getElementById('sim-res-action-txt');
+            const actionBadge = document.getElementById('sim-res-action-badge');
+            const reasonText = document.getElementById('sim-res-reason');
+            const pathText = document.getElementById('sim-path-explanation');
+
+            simBanner.className = "sim-status-banner";
+            simDot.className = "status-dot";
+            actionBadge.className = "action-output";
+
+            let finalAction = "SKIP";
+            let finalReason = "";
+
+            if (!regimePass) {
+                finalAction = "SKIP";
+                finalReason = `Blocked: Market is in TRANSITION regime (ADX ${adx.toFixed(1)}). Entries disabled.`;
+                simBanner.classList.add('hold');
+                simDot.classList.add('hold');
+                actionText.innerText = "NO TRADE (HOLD)";
+                actionBadge.innerText = "SKIP";
+                actionBadge.classList.add('skip');
+            } else if (signal === "HOLD") {
+                finalAction = "SKIP";
+                finalReason = signalExplanation;
+                simBanner.classList.add('hold');
+                simDot.classList.add('hold');
+                actionText.innerText = "NO TRADE (HOLD)";
+                actionBadge.innerText = "SKIP";
+                actionBadge.classList.add('skip');
+            } else if (riskDecision === "VETOED") {
+                finalAction = "BLOCKED";
+                finalReason = `Vetoed by Risk Engine: ${vetoReason}`;
+                simBanner.classList.add('sell'); // Display red for veto
+                simDot.classList.add('sell');
+                actionText.innerText = "TRADE BLOCKED";
+                actionBadge.innerText = "BLOCKED";
+                actionBadge.classList.add('sell');
+            } else {
+                finalAction = `OPEN_${signal}`;
+                finalReason = `Approved: Entering new ${signal} cycle for ${symbol}.`;
+                const isBuy = signal === "BUY";
+                simBanner.classList.add(isBuy ? 'buy' : 'sell');
+                simDot.classList.add(isBuy ? 'buy' : 'sell');
+                actionText.innerText = `${signal} SIGNAL TRIGGERED`;
+                actionBadge.innerText = finalAction;
+                actionBadge.classList.add(isBuy ? 'buy' : 'sell');
+            }
+
+            reasonText.innerText = finalReason;
+
+            // Generate Path Explanation paragraph
+            let pathExplanation = `Evaluating ${symbol} with ADX = ${adx.toFixed(1)}: the market is in ${regime} regime. `;
+            if (regime === "TRANSITION") {
+                pathExplanation += `Because the ADX is between 18 and 25, new trade entries are completely blocked per Constitution §4 rules to prevent trading during trend transitions. The process terminates.`;
+            } else {
+                pathExplanation += `New trades are permitted. The Signal Engine evaluates H4 RSI (${rsiH4.toFixed(1)}) and H1 RSI (${rsiH1.toFixed(1)}). `;
+                if (isBullishTrend) {
+                    pathExplanation += `Both are above the buy threshold of 53.0, defining a Bullish Trend. M15 RSI trigger check is ${rsiM15 > 50.0 ? "passed (> 50)" : "failed (<= 50)"}. Pullback confirmation is ${exhaustionConfirmed ? "successful" : "unsuccessful"} (strict = ${strictExhaustion}). `;
+                } else if (isBearishTrend) {
+                    pathExplanation += `Both are below the sell threshold of 47.0, defining a Bearish Trend. M15 RSI trigger check is ${rsiM15 < 50.0 ? "passed (< 50)" : "failed (>= 50)"}. Pullback confirmation is ${exhaustionConfirmed ? "successful" : "unsuccessful"} (strict = ${strictExhaustion}). `;
+                } else {
+                    pathExplanation += `RSI H4/H1 are in the neutral zone, meaning there is no active direction. The bot generates a HOLD.`;
+                }
+
+                if (signal !== "HOLD") {
+                    pathExplanation += ` A ${signal} signal is generated. The Risk Engine runs validation checks: current spread of ${spread.toFixed(1)} pips is compared to the limit of ${spreadLimit.toFixed(1)} pips for ${symbol}. `;
+                    if (isSpreadOk) {
+                        pathExplanation += `The spread check passes, resulting in trade approval: ${finalAction} is executed.`;
+                    } else {
+                        pathExplanation += `The spread check fails, triggering a SPREAD_HIGH veto. The trade deal is BLOCKED.`;
+                    }
+                }
+            }
+
+            pathText.innerText = pathExplanation;
+        }
+
+        // --- CLIENT-SIDE JSONL LOG INSPECTOR ---
+        let rawLogRecords = [];
+
+        // Drag & Drop event handlers
+        const dropzone = document.getElementById('dropzone');
+
+        window.addEventListener('dragenter', e => { e.preventDefault(); });
+        window.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+        window.addEventListener('dragleave', e => { e.preventDefault(); dropzone.classList.remove('dragover'); });
+        window.addEventListener('drop', e => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                parseLogFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) {
+                parseLogFile(e.target.files[0]);
+            }
+        }
+
+        function parseLogFile(file) {
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const text = evt.target.result;
+                const lines = text.split('\n');
+                rawLogRecords = [];
+                
+                const symbolsSet = new Set();
+
+                lines.forEach(line => {
+                    if (line.trim() === '') return;
+                    try {
+                        const record = JSON.parse(line);
+                        rawLogRecords.push(record);
+                        if (record.symbol) {
+                            symbolsSet.add(record.symbol);
+                        }
+                    } catch (err) {
+                        // Ignore syntax/parsing errors on partial lines
+                    }
+                });
+
+                // Populate symbols filter
+                const symbolFilter = document.getElementById('filter-symbol');
+                symbolFilter.innerHTML = '<option value="ALL">All Symbols</option>';
+                Array.from(symbolsSet).sort().forEach(sym => {
+                    const opt = document.createElement('option');
+                    opt.value = sym;
+                    opt.innerText = sym;
+                    symbolFilter.appendChild(opt);
+                });
+
+                // Render table
+                document.getElementById('inspector-placeholder').style.display = 'none';
+                applyFilters();
+            };
+            reader.readAsText(file);
+        }
+
+        function applyFilters() {
+            const symVal = document.getElementById('filter-symbol').value;
+            const sevVal = document.getElementById('filter-severity').value;
+            const sigVal = document.getElementById('filter-signal').value;
+            const actVal = document.getElementById('filter-action').value;
+
+            const tbody = document.getElementById('log-table-body');
+            tbody.innerHTML = '';
+
+            let filtered = rawLogRecords.filter(rec => {
+                // Symbol
+                if (symVal !== 'ALL' && rec.symbol !== symVal) return false;
+                
+                // Severity
+                if (sevVal !== 'ALL' && rec.severity !== sevVal) return false;
+                
+                // Signal
+                if (sigVal !== 'ALL' && rec.signal !== sigVal) return false;
+                
+                // Action
+                if (actVal !== 'ALL') {
+                    const act = rec.execution_action || "";
+                    if (actVal === 'OPEN' && !act.startsWith('OPEN_')) return false;
+                    if (actVal === 'DCA' && !act.startsWith('DCA_')) return false;
+                    if (actVal === 'BLOCKED' && act !== 'BLOCKED') return false;
+                    if (actVal === 'SKIP' && act !== 'SKIP') return false;
+                }
+
+                return true;
+            });
+
+            document.getElementById('log-count').innerText = `Records: ${filtered.length}`;
+
+            filtered.forEach(rec => {
+                const tr = document.createElement('tr');
+                tr.onclick = () => showDetailModal(rec);
+
+                // Timestamp formatting
+                const timeStr = rec.timestamp ? rec.timestamp.split('T')[1].substring(0, 8) : 'N/A';
+                
+                // Format indicators
+                let rsiStr = 'N/A';
+                if (rec.RSI_H4 !== undefined) {
+                    rsiStr = `${rec.RSI_H4 || 'N/A'}/${rec.RSI_H1 || 'N/A'}/${rec.RSI_M15 || 'N/A'}`;
+                }
+
+                const severity = rec.severity || (rec.event === 'ERROR' ? 'WARNING' : 'INFO');
+                const riskDec = rec.risk_decision || (rec.event === 'ERROR' ? 'ERROR' : 'N/A');
+                const action = rec.execution_action || (rec.event === 'ERROR' ? 'ERR_LOG' : 'SKIP');
+
+                tr.innerHTML = `
+                    <td style="font-family: var(--font-mono);">${timeStr}</td>
+                    <td><span class="sev-tag ${severity.toLowerCase()}">${severity}</span></td>
+                    <td style="font-weight: 700;">${rec.symbol || rec.event || 'N/A'}</td>
+                    <td>${rec.session || 'N/A'}</td>
+                    <td style="font-family: var(--font-mono);">${rsiStr}</td>
+                    <td style="font-family: var(--font-mono);">${rec.ADX || 'N/A'}</td>
+                    <td style="font-family: var(--font-mono);">${rec.ATR || 'N/A'}</td>
+                    <td><span class="sig-tag ${(rec.signal || 'HOLD').toLowerCase()}">${rec.signal || 'HOLD'}</span></td>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;" title="${rec.reason || ''}">${riskDec}</td>
+                    <td><span class="action-output ${action.toLowerCase().includes('buy') ? 'buy' : action.toLowerCase().includes('sell') ? 'sell' : 'skip'}" style="font-size: 0.75rem; padding: 2px 6px;">${action}</span></td>
+                `;
+
+                tbody.appendChild(tr);
+            });
+        }
+
+        function showDetailModal(record) {
+            document.getElementById('modal-json').innerText = JSON.stringify(record, null, 2);
+            document.getElementById('log-modal').style.display = 'flex';
+        }
+
+        function closeModal(e) {
+            document.getElementById('log-modal').style.display = 'none';
+        }
+
+        // Initialize view
+        selectNode('mt5');
+    </script>
+</body>
+</html>
