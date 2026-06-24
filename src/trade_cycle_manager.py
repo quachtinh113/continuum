@@ -286,11 +286,12 @@ class TradeCycleManager:
         self,
         symbol: str,
         current_price: float,
-        atr: Optional[float] = None
+        atr: Optional[float] = None,
+        minor_liquidity_swept: bool = False
     ) -> Optional[str]:
         """
         Check and apply Break-Even (BE) activation logic:
-        1. If price reaches the activation distance (based on ATR), activate BE.
+        1. If price reaches the activation distance (based on ATR) or minor liquidity is swept, activate BE.
         2. Once BE is activated, if price pulls back to average entry price plus/minus
            the dynamic buffer (based on ATR), close the cycle.
         """
@@ -303,31 +304,32 @@ class TradeCycleManager:
 
         avg_price = cycle.average_entry_price
         
-        activation_mult = getattr(settings, "BREAK_EVEN_ACTIVATION_ATR_MULTIPLIER", 0.75)
+        activation_mult = getattr(settings, "BREAK_EVEN_ACTIVATION_ATR_MULTIPLIER", 1.5)
         buffer_mult = getattr(settings, "BREAK_EVEN_BUFFER_ATR_MULTIPLIER", 0.0)
         
         activation_distance = atr * activation_mult
         buffer_distance = atr * buffer_mult
 
-        if cycle.direction == "BUY":
-            # Check for BE activation (price reached activation distance)
-            if not cycle.be_activated and current_price >= avg_price + activation_distance:
-                cycle.be_activated = True
-                log_info(f"🛡️ BE Activated for BUY {symbol} (Price {current_price:.5f} >= {avg_price + activation_distance:.5f})")
+        if activation_mult < 900.0:
+            if cycle.direction == "BUY":
+                # Check for BE activation (price reached activation distance or minor liquidity swept)
+                if not cycle.be_activated and (current_price >= avg_price + activation_distance or minor_liquidity_swept):
+                    cycle.be_activated = True
+                    log_info(f"🛡️ BE Activated for BUY {symbol} (Price {current_price:.5f} >= {avg_price + activation_distance:.5f} or Liq Swept)")
 
-            # Check for BE exit (pullback to average entry + buffer distance or below)
-            if cycle.be_activated and current_price <= avg_price + buffer_distance:
-                return "BREAK_EVEN"
+                # Check for BE exit (pullback to average entry + buffer distance or below)
+                if cycle.be_activated and current_price <= avg_price + buffer_distance:
+                    return "BREAK_EVEN"
 
-        elif cycle.direction == "SELL":
-            # Check for BE activation (price reached activation distance)
-            if not cycle.be_activated and current_price <= avg_price - activation_distance:
-                cycle.be_activated = True
-                log_info(f"🛡️ BE Activated for SELL {symbol} (Price {current_price:.5f} <= {avg_price - activation_distance:.5f})")
+            elif cycle.direction == "SELL":
+                # Check for BE activation (price reached activation distance or minor liquidity swept)
+                if not cycle.be_activated and (current_price <= avg_price - activation_distance or minor_liquidity_swept):
+                    cycle.be_activated = True
+                    log_info(f"🛡️ BE Activated for SELL {symbol} (Price {current_price:.5f} <= {avg_price - activation_distance:.5f} or Liq Swept)")
 
-            # Check for BE exit (pullback to average entry - buffer distance or above)
-            if cycle.be_activated and current_price >= avg_price - buffer_distance:
-                return "BREAK_EVEN"
+                # Check for BE exit (pullback to average entry - buffer distance or above)
+                if cycle.be_activated and current_price >= avg_price - buffer_distance:
+                    return "BREAK_EVEN"
 
         return None
 

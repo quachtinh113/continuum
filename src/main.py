@@ -600,7 +600,16 @@ class NowTradingBot:
             return
 
         # ── Break-Even Rule ──
-        be_action = self.cycle_manager.check_break_even(symbol, current_price, atr)
+        minor_liquidity_swept = False
+        if indicators:
+            if cycle.direction == "BUY":
+                minor_liquidity_swept = indicators.get("M15_FRESH_LOCAL_HIGH", False)
+            else:
+                minor_liquidity_swept = indicators.get("M15_FRESH_LOCAL_LOW", False)
+
+        be_action = self.cycle_manager.check_break_even(
+            symbol, current_price, atr, minor_liquidity_swept=minor_liquidity_swept
+        )
         if be_action == "BREAK_EVEN":
             self._close_cycle_orders(symbol, "BREAK_EVEN")
             log_info(

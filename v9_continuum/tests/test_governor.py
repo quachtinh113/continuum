@@ -100,20 +100,26 @@ class TestV9ContinuumFramework(unittest.TestCase):
         """
         Verifies Gold & Index combo constraints (Max 1).
         """
-        # Set up active index position
-        active_positions = [{"symbol": "US100"}]
-        
-        # Requesting Gold should be blocked
-        approved, msg = self.governor.evaluate_risk_matrix(
-            "XAUUSD",
-            active_positions,
-            9900.0,
-            10000.0,
-            time.time()
-        )
-        
-        self.assertFalse(approved)
-        self.assertIn("Gold & Index combination limit", msg)
+        from v9_continuum.config import matrix_config
+        original_limit = matrix_config.max_gold_index_combo
+        matrix_config.max_gold_index_combo = 1
+        try:
+            # Set up active index position
+            active_positions = [{"symbol": "US100"}]
+            
+            # Requesting Gold should be blocked
+            approved, msg = self.governor.evaluate_risk_matrix(
+                "XAUUSD",
+                active_positions,
+                9900.0,
+                10000.0,
+                time.time()
+            )
+            
+            self.assertFalse(approved)
+            self.assertIn("Gold & Index combination limit", msg)
+        finally:
+            matrix_config.max_gold_index_combo = original_limit
 
     # ── 4. Exponential Volatility Decay Test ─────────────────────────
 

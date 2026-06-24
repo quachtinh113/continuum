@@ -269,7 +269,6 @@ class V9ContinuumBacktester:
                     spread_cost_realtime=spread_usd,
                     commission=commission
                 )
-                
                 is_tp_hit = False
                 if cycle["direction"] == "BUY" and row["high"] >= net_tp_target:
                     is_tp_hit = True
@@ -278,6 +277,40 @@ class V9ContinuumBacktester:
 
                 if is_tp_hit and cycle["holding_hours"] > 1.0:
                     self.close_position(sym, portfolio, net_tp_target, current_time, "TAKE_PROFIT")
+                    continue
+
+                # ── Break-Even Check (Relaxed BE logic) ──
+                minor_liq_swept = False
+                if len(history_records[sym]) >= 20:
+                    df_history = pd.DataFrame(history_records[sym])
+                    swing_highs, swing_lows = self.smc_engine.find_swings(df_history)
+                    if not swing_highs.empty and not swing_lows.empty:
+                        last_swing_high = float(swing_highs.iloc[-1])
+                        last_swing_low = float(swing_lows.iloc[-1])
+                        if cycle["direction"] == "BUY" and current_price >= last_swing_high:
+                            minor_liq_swept = True
+                        elif cycle["direction"] == "SELL" and current_price <= last_swing_low:
+                            minor_liq_swept = True
+
+                activation_distance = 1.5 * row["ATR"]
+                buffer_distance = 0.0 # Exit at entry price exactly
+
+                is_be_triggered = False
+                if cycle["direction"] == "BUY":
+                    if not cycle.get("be_activated", False) and (current_price >= avg_entry_price + activation_distance or minor_liq_swept):
+                        cycle["be_activated"] = True
+                    
+                    if cycle.get("be_activated", False) and current_price <= avg_entry_price + buffer_distance:
+                        is_be_triggered = True
+                else: # SELL
+                    if not cycle.get("be_activated", False) and (current_price <= avg_entry_price - activation_distance or minor_liq_swept):
+                        cycle["be_activated"] = True
+                    
+                    if cycle.get("be_activated", False) and current_price >= avg_entry_price - buffer_distance:
+                        is_be_triggered = True
+
+                if is_be_triggered:
+                    self.close_position(sym, portfolio, avg_entry_price, current_time, "BREAK_EVEN")
                     continue
 
                 # 12-Hour cognitive ML cutoff rule
@@ -327,18 +360,29 @@ class V9ContinuumBacktester:
                     self.close_position(sym, portfolio, current_price, current_time, "24H_HARD_CUT")
                     continue
 
-                # DCA spacings check (widened for JPY and Indices to avoid premature filling)
+                # DCA spacings check (Dynamic Progressive Step)
+                # Space out DCA layers using H1 ATR (widened for JPY and Indices to avoid premature filling)
                 dca_multiplier = 1.0 * self.dca_multiplier_scale
                 if "JPY" in sym or sym == "XAUUSD":
                     dca_multiplier = 1.8 * self.dca_multiplier_scale
                 elif sym in ["US500", "US100", "BTCUSD"]:
                     dca_multiplier = 1.5 * self.dca_multiplier_scale
-                spacing = cycle["atr"] * dca_multiplier
+
+                # Progressive steps: Layer 1 = 1.5 * ATR, Layer 2 = 4.0 * ATR, Layer 3 = 8.0 * ATR from entry
+                step_multipliers = [1.5, 4.0, 8.0]
+                current_layer_idx = len(cycle["dca_layers"])
+                if current_layer_idx < len(step_multipliers):
+                    spacing_price = row["ATR"] * step_multipliers[current_layer_idx] * dca_multiplier
+                else:
+                    spacing_price = row["ATR"] * 8.0 * dca_multiplier
+
+                # Check if price moved against us by spacing distance from entry price
+                entry_price = cycle["entry_price"]
                 should_dca = False
                 
-                if cycle["direction"] == "BUY" and current_price <= (cycle["entry_price"] - spacing * (len(cycle["dca_layers"]) + 1)):
+                if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price):
                     should_dca = True
-                elif cycle["direction"] == "SELL" and current_price >= (cycle["entry_price"] + spacing * (len(cycle["dca_layers"]) + 1)):
+                elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
                     should_dca = True
 
                 if should_dca and len(cycle["dca_layers"]) < 3 and not day_drawdown_locked:
@@ -440,7 +484,8 @@ class V9ContinuumBacktester:
                                 "spread": spread,
                                 "atr": atr_val,
                                 "reason": reason,
-                                "price": row["close"]
+                                "price": row["close"],
+                                "loss_prob": loss_prob
                             }
                             candidate_tokens.append(token)
 
@@ -462,7 +507,7 @@ class V9ContinuumBacktester:
                         if approved:
                             # Sizer - reduced risk_percent from 0.5% to 0.15% to buffer the 3% drawdown limit
                             lot_size = self.position_sizer.calculate_lot_size(
-                                portfolio.equity, winner["atr"], sym, risk_percent=self.risk_percent
+                                portfolio.equity, winner["atr"], sym, risk_percent=self.risk_percent, ml_score=winner.get("loss_prob")
                             )
                             # Normalization step simulated
                             lot_size = max(0.01, round(lot_size, 2))
@@ -477,7 +522,8 @@ class V9ContinuumBacktester:
                                 "holding_hours": 0.0,
                                 "atr": winner["atr"],
                                 "is_extended": False,
-                                "floating_pnl": 0.0
+                                "floating_pnl": 0.0,
+                                "be_activated": False
                             }
 
         # Calculate final metrics

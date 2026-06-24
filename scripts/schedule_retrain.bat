@@ -3,7 +3,7 @@ REM NowTrading V9 — Daily ML Retrain Scheduler
 REM Runs daily_retrain.py every day at 05:00 AM Vietnam time (22:00 UTC)
 REM Register this task with Windows Task Scheduler via: schedule_retrain.bat INSTALL
 
-SET PROJECT_DIR=d:\05_Quant\NOWTRAEDING
+SET PROJECT_DIR=d:\05_Quant\v9 Continuum
 SET PYTHON=python
 SET SCRIPT=%PROJECT_DIR%\scripts\daily_retrain.py
 SET LOG=%PROJECT_DIR%\logs\retrain_scheduler.log

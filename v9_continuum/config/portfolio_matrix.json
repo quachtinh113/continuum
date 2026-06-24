@@ -1,9 +1,9 @@
 {
   "max_open_positions": 3,
   "max_total_risk_percent": 2.0,
-  "max_daily_drawdown_percent": 3.0,
+  "max_daily_drawdown_percent": 5.0,
   "max_usd_exposure": 2,
-  "max_gold_index_combo": 1,
+  "max_gold_index_combo": 2,
   "news_lock_minutes": 30,
   "holding_reduce_hours": 12,
   "max_holding_hours": 18

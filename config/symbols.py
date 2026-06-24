@@ -68,6 +68,12 @@ SYMBOLS: Dict[str, SymbolSpec] = {
     ),
 
     # ── US Indices ──
+    "US30": SymbolSpec(
+        name="US30m", category="INDEX",
+        pip_size=0.01, default_lot=settings.MAX_LOT_SIZE,
+        spread_limit=settings.SPREAD_LIMIT_INDEX,
+        contract_size=1, description="Dow Jones 30"
+    ),
     "US100": SymbolSpec(
         name="USTECm", category="INDEX",
         pip_size=0.01, default_lot=settings.MAX_LOT_SIZE,

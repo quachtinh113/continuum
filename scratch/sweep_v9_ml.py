@@ -51,10 +51,10 @@ def run_sweep():
         if (PROJECT_ROOT / "data" / "historical" / f"{s}_M15.csv").exists():
             available_symbols.append(s)
 
-    # Suggesed targeted sweep parameters: 3 * 3 * 3 = 27 runs
-    target_values = [180.0, 200.0, 220.0]
+    # Suggesed targeted sweep parameters: 7 * 3 = 21 runs
+    target_values = [10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 180.0]
     ml_extend_thresholds = [0.40, 0.45, 0.50]
-    ml_cut_thresholds = [0.60, 0.65, 0.70]
+    ml_cut_thresholds = [0.65]
     
     dca_scale = 1.0
     ml_veto = 0.60

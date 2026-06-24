@@ -15,10 +15,12 @@ class PositionSizer:
         atr: float,
         symbol: str,
         risk_percent: float = 0.5,
-        atr_multiplier: float = 1.5
+        atr_multiplier: float = 1.5,
+        ml_score: Optional[float] = None
     ) -> float:
         """
-        Calculates a volatility-adjusted lot size based on ATR and equity risk.
+        Calculates a volatility-adjusted lot size based on ATR and equity risk,
+        incorporating 3-tier ML dynamic scaling for FX and INDEX symbols.
         Formula:
           Risk USD = Equity * Risk Percent
           SL Distance = ATR * ATR Multiplier
@@ -33,6 +35,15 @@ class PositionSizer:
 
         # Lot calculation based on contract specifications
         raw_lot = risk_usd / (sl_distance * spec.contract_size)
+
+        # Apply ML scaling for INDEX or FX if ml_score is provided
+        if ml_score is not None and spec.category in ["FX", "INDEX"]:
+            from config import settings
+            if ml_score < getattr(settings, "ML_LOT_BOOST_THRESHOLD", 0.25):
+                raw_lot = raw_lot * getattr(settings, "ML_LOT_BOOST_MULTIPLIER", 1.5)
+            elif ml_score > getattr(settings, "ML_LOT_REDUCE_THRESHOLD", 0.45):
+                raw_lot = raw_lot * getattr(settings, "ML_LOT_REDUCE_MULTIPLIER", 0.7)
+
         return max(0.01, float(raw_lot))
 
     def calculate_target_exit_price(

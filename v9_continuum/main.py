@@ -12,7 +12,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from src.mt5_connector import MT5Connector
 from src.session_manager import get_current_session, is_weekend, Session
-from src.audit_logger import log_info, log_error, log_decision
+from src.audit_logger import log_info, log_error, log_decision, log_cycle_event
+
+class RiskDecision:
+    def __init__(self, approved: bool, reason: str, severity: str = "INFO"):
+        self.approved = approved
+        self.reason = reason
+        self.severity = severity
+        self.status_str = "APPROVED" if approved else "VETOED"
+
 
 from v9_continuum.config import matrix_config
 from v9_continuum.core.governor import PortfolioGovernor
@@ -69,7 +77,9 @@ class V9ContinuumBot:
         if self.last_balance_update_day != today:
             self.start_of_day_balance = current_balance
             self.last_balance_update_day = today
-            log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}")
+            # Reset Governor to OPERATIONAL when day changes
+            self.governor.system_status = "OPERATIONAL"
+            log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}. Governor status reset to OPERATIONAL")
 
     def evaluate_symbol_signal(
         self,
@@ -180,23 +190,27 @@ class V9ContinuumBot:
                 
                 # Check ML Confirmation Filter
                 session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
+                # Normalize ATR by price to keep all assets on the same scale
+                normalized_atr = atr_val / rates_m15["close"].iloc[-1]
+                
                 feat = {
                     "RSI_M15": rsi_m15,
                     "RSI_H1": rsi_h1,
                     "RSI_H4": rsi_h4,
                     "ADX": adx_val,
-                    "ATR": atr_val,
+                    "ATR": normalized_atr, # scaled relative ATR
                     "RSI_Delta": rsi_h4 - rsi_m15,
-                    "Volatility_Index": atr_val / rates_m15["close"].iloc[-1],
+                    "Volatility_Index": normalized_atr,
                     "hour": datetime.now(timezone.utc).hour,
                     "Session_Code": session_map.get(session.value if hasattr(session, "value") else str(session), -1),
                     "RSI_H1_Div": abs(rsi_h1 - 50.0),
-                    "Trend_Vol_Ratio": adx_val * atr_val
+                    "Trend_Vol_Ratio": adx_val * normalized_atr # scaled Trend-Vol Ratio
                 }
                 
                 loss_prob = self.ml_engine.predict_loss_probability(feat)
                 if loss_prob > 0.6:
                     log_info(f"🛡️ ML filter vetoed {sig_val.value} entry for {symbol} due to high loss risk ({loss_prob:.2f})")
+                    log_decision(symbol, session.value if hasattr(session, "value") else str(session), feat, sig_val.value, RiskDecision(False, f"ML filter vetoed due to loss risk {loss_prob:.2f}"), "VETOED")
                     continue
 
                 token = {
@@ -206,7 +220,9 @@ class V9ContinuumBot:
                     "spread": spread,
                     "atr": atr_val,
                     "reason": reason,
-                    "price": rates_m15["close"].iloc[-1]
+                    "price": rates_m15["close"].iloc[-1],
+                    "loss_prob": loss_prob,
+                    "features": feat
                 }
                 candidate_tokens.append(token)
 
@@ -214,6 +230,7 @@ class V9ContinuumBot:
         winner = self.governor.process_token_queue(candidate_tokens)
         if winner:
             symbol = winner["symbol"]
+            session_str = session.value if hasattr(session, "value") else str(session)
             
             # Retrieve account status
             acc = self.connector.get_account_info()
@@ -230,10 +247,15 @@ class V9ContinuumBot:
             
             if not approved:
                 log_info(f"🚫 Governor blocked {winner['direction']} for {symbol}: {status_msg}")
+                log_decision(symbol, session_str, winner.get("features"), winner["direction"], RiskDecision(False, f"Governor blocked: {status_msg}"), "BLOCKED")
                 return
 
+            log_decision(symbol, session_str, winner.get("features"), winner["direction"], RiskDecision(True, "Approved by Governor"), "ROUTE")
+
             # Sizing and routing
-            lot_size = self.position_sizer.calculate_lot_size(equity, winner["atr"], symbol, risk_percent=0.15)
+            lot_size = self.position_sizer.calculate_lot_size(
+                equity, winner["atr"], symbol, risk_percent=0.15, ml_score=winner.get("loss_prob")
+            )
             
             ticket = self.execution.route_order(
                 symbol=symbol,
@@ -255,9 +277,13 @@ class V9ContinuumBot:
                     "dca_layers": [],
                     "holding_hours": 0.0,
                     "atr": winner["atr"],
-                    "is_extended": False
+                    "is_extended": False,
+                    "features": winner.get("features"),
+                    "last_tick": {"spread_pips": winner["spread"]},
+                    "be_activated": False
                 }
                 log_info(f"🚀 Base cycle opened for {symbol} ({winner['direction']}) at {winner['price']}")
+                log_cycle_event("CYCLE_OPEN", symbol, winner["direction"], {"price": winner["price"], "lot": lot_size, "ticket": ticket})
 
     def manage_cycles(self):
         """
@@ -269,9 +295,15 @@ class V9ContinuumBot:
         # Check global drawdown switch
         if self.start_of_day_balance > 0.0:
             drawdown = 100.0 * (self.start_of_day_balance - equity) / self.start_of_day_balance
-            if drawdown >= matrix_config.max_daily_drawdown_percent or self.governor.system_status == "LOCKED":
-                log_error(f"🚨 Drawdown Limit Breached ({drawdown:.2f}%). Emergency closing all positions!")
-                self.close_all_positions()
+            if drawdown >= matrix_config.max_daily_drawdown_percent:
+                if self.active_cycles or self.governor.system_status != "LOCKED":
+                    self.governor.system_status = "LOCKED"
+                    log_error(f"🚨 Drawdown Limit Breached ({drawdown:.2f}%). Emergency closing all positions and locking system!")
+                    self.close_all_positions()
+                return
+            
+            if self.governor.system_status == "LOCKED":
+                # If governor is locked but current drawdown is within limit, keep the lock to prevent revenge trading
                 return
 
         now = datetime.now(timezone.utc)
@@ -338,6 +370,59 @@ class V9ContinuumBot:
                 self.execution.close_position(cycle["ticket"], symbol)
                 for dca in cycle["dca_layers"]:
                     self.execution.close_position(dca["ticket"], symbol)
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "TAKE_PROFIT")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "TAKE_PROFIT"})
+                symbols_to_delete.append(symbol)
+                continue
+
+            # ── 1.5. Break-Even Check (Relaxed BE logic) ──
+            # Fetch H1 indicators for current ATR
+            rates_h1_be = self.connector.get_rates(symbol, "H1", 100)
+            if rates_h1_be is not None and not rates_h1_be.empty:
+                atr_series_be = rates_h1_be["close"].diff().abs().rolling(14).mean()
+                current_atr_be = float(atr_series_be.iloc[-1]) if not atr_series_be.empty else cycle["atr"]
+            else:
+                current_atr_be = cycle["atr"]
+
+            # Minor Liquidity check (Swing High/Low sweep)
+            minor_liq_swept = False
+            rates_m15_be = self.connector.get_rates(symbol, "M15", 100)
+            if rates_m15_be is not None and not rates_m15_be.empty:
+                swing_highs, swing_lows = self.smc_engine.find_swings(rates_m15_be)
+                if not swing_highs.empty and not swing_lows.empty:
+                    last_swing_high = float(swing_highs.iloc[-1])
+                    last_swing_low = float(swing_lows.iloc[-1])
+                    if cycle["direction"] == "BUY" and current_price >= last_swing_high:
+                        minor_liq_swept = True
+                    elif cycle["direction"] == "SELL" and current_price <= last_swing_low:
+                        minor_liq_swept = True
+
+            activation_distance = 1.5 * current_atr_be
+            buffer_distance = 0.0 # Exit at entry price exactly
+
+            is_be_triggered = False
+            if cycle["direction"] == "BUY":
+                if not cycle.get("be_activated", False) and (current_price >= avg_entry_price + activation_distance or minor_liq_swept):
+                    cycle["be_activated"] = True
+                    log_info(f"🛡️ BE Activated for BUY {symbol} (Price {current_price:.5f} >= {avg_entry_price + activation_distance:.5f} or Liq Swept)")
+                
+                if cycle.get("be_activated", False) and current_price <= avg_entry_price + buffer_distance:
+                    is_be_triggered = True
+            else: # SELL
+                if not cycle.get("be_activated", False) and (current_price <= avg_entry_price - activation_distance or minor_liq_swept):
+                    cycle["be_activated"] = True
+                    log_info(f"🛡️ BE Activated for SELL {symbol} (Price {current_price:.5f} <= {avg_entry_price - activation_distance:.5f} or Liq Swept)")
+                
+                if cycle.get("be_activated", False) and current_price >= avg_entry_price - buffer_distance:
+                    is_be_triggered = True
+
+            if is_be_triggered:
+                log_info(f"🛡️ Break-Even exit triggered for {symbol}. Closing cycle!")
+                self.execution.close_position(cycle["ticket"], symbol)
+                for dca in cycle["dca_layers"]:
+                    self.execution.close_position(dca["ticket"], symbol)
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "BREAK_EVEN")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "BREAK_EVEN"})
                 symbols_to_delete.append(symbol)
                 continue
 
@@ -387,10 +472,13 @@ class V9ContinuumBot:
                             worst_layer = cycle["dca_layers"].pop(0) # close one layer
                             self.execution.close_position(worst_layer["ticket"], symbol)
                             log_info(f"📉 12H Cutoff: Indecision ({risk_score:.2f}) for {symbol}. Removing DCA layer ticket {worst_layer['ticket']}.")
+                            log_cycle_event("DCA_CLOSE", symbol, cycle["direction"], {"price": current_price, "ticket": worst_layer["ticket"], "reason": "12H_INDECISION"})
                         else:
                             # No DCA layer, cut whole cycle
                             log_info(f"✂️ 12H Cutoff: Indecision ({risk_score:.2f}) with no DCA layers for {symbol}. Cutting position.")
                             self.execution.close_position(cycle["ticket"], symbol)
+                            self.record_closed_cycle_to_training_data(cycle, current_price, now, "12H_INDECISION")
+                            log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "12H_INDECISION"})
                             symbols_to_delete.append(symbol)
                     else:
                         # High risk or limit reached - cut position immediately
@@ -398,25 +486,41 @@ class V9ContinuumBot:
                         self.execution.close_position(cycle["ticket"], symbol)
                         for dca in cycle["dca_layers"]:
                             self.execution.close_position(dca["ticket"], symbol)
+                        self.record_closed_cycle_to_training_data(cycle, current_price, now, "12H_HIGH_RISK")
+                        log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "12H_HIGH_RISK"})
                         symbols_to_delete.append(symbol)
                         continue
 
-            # ── 3. DCA Layer spacing management ──
+            # ── 3. DCA Layer spacing management (Dynamic Progressive Step) ──
+            rates_h1_dca = self.connector.get_rates(symbol, "H1", 100)
+            if rates_h1_dca is not None and not rates_h1_dca.empty:
+                atr_series_dca = rates_h1_dca["close"].diff().abs().rolling(14).mean()
+                current_atr_dca = float(atr_series_dca.iloc[-1]) if not atr_series_dca.empty else cycle["atr"]
+            else:
+                current_atr_dca = cycle["atr"]
+
             # Space out DCA layers using ATR (widened for JPY and Indices to avoid premature filling)
             dca_multiplier = 1.0
             if "JPY" in symbol or symbol == "XAUUSD":
                 dca_multiplier = 1.8
             elif symbol in ["US500", "US100", "BTCUSD"]:
                 dca_multiplier = 1.5
-            spacing_price = cycle["atr"] * dca_multiplier
-            
-            # Check if price moved against us by spacing distance
+
+            # Progressive steps: Layer 1 = 1.5 * ATR, Layer 2 = 4.0 * ATR, Layer 3 = 8.0 * ATR from entry
+            step_multipliers = [1.5, 4.0, 8.0]
+            current_layer_idx = len(cycle["dca_layers"])
+            if current_layer_idx < len(step_multipliers):
+                spacing_price = current_atr_dca * step_multipliers[current_layer_idx] * dca_multiplier
+            else:
+                spacing_price = current_atr_dca * 8.0 * dca_multiplier
+
+            # Check if price moved against us by spacing distance from entry price
             entry_price = cycle["entry_price"]
             should_dca = False
             
-            if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price * (len(cycle["dca_layers"]) + 1)):
+            if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price):
                 should_dca = True
-            elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price * (len(cycle["dca_layers"]) + 1)):
+            elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
                 should_dca = True
 
             if should_dca and len(cycle["dca_layers"]) < 3:  # Hard limit 3 layers
@@ -437,6 +541,7 @@ class V9ContinuumBot:
                         "entry_time": now
                     })
                     log_info(f"➕ DCA Layer {len(cycle['dca_layers'])} added for {symbol} at {current_price}")
+                    log_cycle_event("DCA_OPEN", symbol, cycle["direction"], {"price": current_price, "lot": dca_lot, "ticket": dca_ticket, "layer": len(cycle["dca_layers"])})
 
             # ── 4. 24H Absolute Time Cutoff ──
             if cycle["holding_hours"] >= 24.0:
@@ -444,6 +549,8 @@ class V9ContinuumBot:
                 self.execution.close_position(cycle["ticket"], symbol)
                 for dca in cycle["dca_layers"]:
                     self.execution.close_position(dca["ticket"], symbol)
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "24H_HARD_CUT")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "24H_HARD_CUT"})
                 symbols_to_delete.append(symbol)
 
         for symbol in symbols_to_delete:
@@ -512,9 +619,79 @@ class V9ContinuumBot:
                     "dca_layers": [],
                     "holding_hours": (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0,
                     "atr": atr_val,
-                    "is_extended": False
+                    "is_extended": False,
+                    "be_activated": False
                 }
                 log_info(f"🔄 Recovered Base Cycle for {internal_symbol} (Direction: {direction}, Ticket: {ticket})")
+
+    def record_closed_cycle_to_training_data(self, cycle: Dict[str, Any], exit_price: float, current_time: datetime, reason: str):
+        """
+        Appends a closed trade cycle to logs/training_data.csv for ML self-learning.
+        """
+        if "features" not in cycle or not cycle["features"]:
+            return # Skip if no features (e.g. recovered positions without indicators context)
+
+        symbol = cycle["symbol"]
+        direction = cycle["direction"]
+        entry_time = cycle["entry_time"]
+        
+        # Calculate P&L
+        from config.symbols import get_symbol_spec
+        spec = get_symbol_spec(symbol)
+        diff = (exit_price - cycle["entry_price"]) if direction == "BUY" else (cycle["entry_price"] - exit_price)
+        
+        total_lots = cycle["base_lot"]
+        layer_pnl = 0.0
+        for layer in cycle["dca_layers"]:
+            total_lots += layer["lot"]
+            l_diff = (exit_price - layer["entry_price"]) if direction == "BUY" else (layer["entry_price"] - exit_price)
+            layer_pnl += l_diff * layer["lot"] * spec.contract_size
+
+        base_pnl = diff * cycle["base_lot"] * spec.contract_size
+        total_pnl = base_pnl + layer_pnl
+        
+        if symbol.endswith("JPY") or symbol.endswith("CHF") or symbol.endswith("CAD"):
+            total_pnl = total_pnl / exit_price
+
+        # Realize commissions and slippage/spread costs
+        tick = cycle.get("last_tick")
+        spread_pips = tick["spread_pips"] if tick and "spread_pips" in tick else 2.0
+        
+        pip_val_usd = spec.pip_size * spec.contract_size
+        if symbol.endswith("JPY") or symbol.endswith("CHF") or symbol.endswith("CAD"):
+            pip_val_usd = pip_val_usd / exit_price
+        spread_usd = spread_pips * pip_val_usd * total_lots
+        commission = 7.0 * total_lots
+        
+        final_pnl = total_pnl - spread_usd - commission
+        is_win = 1 if final_pnl > 0 else 0
+            
+        from src.session_manager import get_current_session
+        session = get_current_session(entry_time).value
+
+        # Build row
+        row = {
+            "symbol": symbol,
+            "direction": direction,
+            "entry_time": entry_time.isoformat(),
+            "session": session,
+            "profit_usd": final_pnl,
+            "is_win": is_win,
+            **cycle["features"]
+        }
+        
+        from pathlib import Path
+        csv_path = Path("logs/training_data.csv")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        df_new = pd.DataFrame([row])
+        if csv_path.exists():
+            try:
+                df_new.to_csv(csv_path, mode="a", header=False, index=False)
+            except Exception as e:
+                log_error(f"Error saving to training_data.csv: {e}")
+        else:
+            df_new.to_csv(csv_path, index=False)
 
     def close_all_positions(self):
         """Emergency closes all positions."""

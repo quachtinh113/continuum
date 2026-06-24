@@ -7,8 +7,10 @@ echo          V9 CONTINUUM - INITIALIZING BOT...
 echo =======================================================
 echo.
 
-:: Ensure we are in the correct directory
 cd /d "%~dp0"
+if not exist "v9_continuum" (
+    cd /d "d:\05_Quant\v9 Continuum"
+)
 
 :: Set utf-8 encoding for proper emoji display
 set PYTHONIOENCODING=utf-8

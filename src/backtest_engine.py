@@ -602,34 +602,42 @@ class BacktestEngine:
                 atr = row.get("ATR")
                 if atr is not None and atr > 0:
                     avg_price = cycle.average_entry_price
-                    activation_mult = getattr(settings, "BREAK_EVEN_ACTIVATION_ATR_MULTIPLIER", 0.75)
+                    activation_mult = getattr(settings, "BREAK_EVEN_ACTIVATION_ATR_MULTIPLIER", 1.5)
                     buffer_mult = getattr(settings, "BREAK_EVEN_BUFFER_ATR_MULTIPLIER", 0.0)
                     
                     activation_distance = atr * activation_mult
                     buffer_distance = atr * buffer_mult
 
-                    if cycle.direction == "BUY":
-                        # 1. Activate BE if price reached activation distance
-                        if not getattr(cycle, "be_activated", False) and bar_high >= avg_price + activation_distance:
-                            cycle.be_activated = True
-                        
-                        # 2. If BE is active and price pulls back to average entry + buffer distance, exit
-                        if getattr(cycle, "be_activated", False) and bar_low <= avg_price + buffer_distance:
-                            fill_price = min(bar_open, avg_price + buffer_distance)
-                            portfolio.close_cycle(s, fill_price, current_time, "BREAK_EVEN")
-                            self.hourly_gate.reset(s)
-                            continue
-                    else: # SELL
-                        # 1. Activate BE if price reached activation distance
-                        if not getattr(cycle, "be_activated", False) and bar_low <= avg_price - activation_distance:
-                            cycle.be_activated = True
-                        
-                        # 2. If BE is active and price pulls back to average entry - buffer distance, exit
-                        if getattr(cycle, "be_activated", False) and bar_high >= avg_price - buffer_distance:
-                            fill_price = max(bar_open, avg_price - buffer_distance)
-                            portfolio.close_cycle(s, fill_price, current_time, "BREAK_EVEN")
-                            self.hourly_gate.reset(s)
-                            continue
+                    minor_liq_swept = False
+                    if activation_mult < 900.0:
+                        if cycle.direction == "BUY":
+                            if row.get("M15_FRESH_LOCAL_HIGH", False):
+                                minor_liq_swept = True
+                            
+                            # 1. Activate BE if price reached activation distance or minor liquidity swept
+                            if not getattr(cycle, "be_activated", False) and (bar_high >= avg_price + activation_distance or minor_liq_swept):
+                                cycle.be_activated = True
+                            
+                            # 2. If BE is active and price pulls back to average entry + buffer distance, exit
+                            if getattr(cycle, "be_activated", False) and bar_low <= avg_price + buffer_distance:
+                                fill_price = min(bar_open, avg_price + buffer_distance)
+                                portfolio.close_cycle(s, fill_price, current_time, "BREAK_EVEN")
+                                self.hourly_gate.reset(s)
+                                continue
+                        else: # SELL
+                            if row.get("M15_FRESH_LOCAL_LOW", False):
+                                minor_liq_swept = True
+                            
+                            # 1. Activate BE if price reached activation distance or minor liquidity swept
+                            if not getattr(cycle, "be_activated", False) and (bar_low <= avg_price - activation_distance or minor_liq_swept):
+                                cycle.be_activated = True
+                            
+                            # 2. If BE is active and price pulls back to average entry - buffer distance, exit
+                            if getattr(cycle, "be_activated", False) and bar_high >= avg_price - buffer_distance:
+                                fill_price = max(bar_open, avg_price - buffer_distance)
+                                portfolio.close_cycle(s, fill_price, current_time, "BREAK_EVEN")
+                                self.hourly_gate.reset(s)
+                                continue
 
 
                 # ── DCA rules check ──

@@ -5,27 +5,25 @@
 
 ## Performance Metrics
 - **Initial Balance:** $10000.00
-- **Final Balance:** $10803.75
-- **Total Profit:** $803.75 (8.04%)
-- **Total Trades (Cycles):** 940
-- **Win Rate:** 75.64%
-- **Profit Factor:** 1.15
-- **Gross Profit:** $6245.44
-- **Gross Loss:** $5441.68
-- **Max Drawdown:** $987.12 (9.09%)
+- **Final Balance:** $8431.71
+- **Total Profit:** $-1568.29 (-15.68%)
+- **Total Trades (Cycles):** 1444
+- **Win Rate:** 11.43%
+- **Profit Factor:** 0.56
+- **Gross Profit:** $2017.18
+- **Gross Loss:** $3585.47
+- **Max Drawdown:** $1595.61 (15.61%)
 
 ## Trading Statistics
-- **Average Trades / Day:** 5.22
-- **Average Profit / Trade:** $0.86
-- **Average Holding Hours:** 4.0
-- **Average DCA Layers:** 0.76
+- **Average Trades / Day:** 8.02
+- **Average Profit / Trade:** $-1.09
+- **Average Holding Hours:** 10.6
+- **Average DCA Layers:** 0.22
 - **Max DCA Layers Reached:** 2
 
 ## Exit Reasons Breakdown
-- **TAKE_PROFIT:** 700
-- **ML_VETO_CLOSE:** 25
-- **HARD_STOP_LOSS:** 202
-- **FORCE_CLOSE_RR_LIMIT:** 3
-- **CONDITIONAL_FORCE_CLOSE:** 1
-- **BREAK_EVEN:** 8
-- **DAILY_DRAWDOWN_CUT:** 1
+- **BREAK_EVEN:** 1148
+- **TAKE_PROFIT:** 165
+- **HARD_STOP_LOSS:** 111
+- **FORCE_CLOSE_RR_LIMIT:** 10
+- **CONDITIONAL_FORCE_CLOSE:** 10

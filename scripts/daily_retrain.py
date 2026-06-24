@@ -81,7 +81,8 @@ def load_training_data() -> pd.DataFrame:
             return 65000.0
         return 1.1
 
-    df["Volatility_Index"] = df["ATR"] / df["symbol"].apply(get_approx_price)
+    df["ATR"] = df["ATR"] / df["symbol"].apply(get_approx_price)
+    df["Volatility_Index"] = df["ATR"]
         
     # New engineered features for quant risk enhancements
     session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
@@ -192,6 +193,14 @@ def main():
     print("  NowTrading V9 - Daily ML Retrain Pipeline")
     print(f"  {timestamp}")
     print("=" * 60)
+    
+    # 0. Run Nightly Audit to analyze logs and extract lessons
+    try:
+        from scripts.nightly_audit import main as run_audit
+        run_audit()
+    except Exception as e:
+        print(f"Warning: Nightly Audit failed to run: {e}")
+    print("-" * 60)
     
     if not HAS_XGB:
         print("ERROR: XGBoost not installed. Retrain skipped.")
