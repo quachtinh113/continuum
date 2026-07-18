@@ -1,0 +1,151 @@
+﻿Loaded 99 opens, 64 closes, 71 errors/warnings for the week of July 12 to July 18, 2026.
+
+==================================================================
+≡ƒôè COMPLETED TRADES STATISTICS (July 12 - July 18, 2026)
+==================================================================
+Total Closed Trades       Γöé 64
+Total Net PnL (USD)       Γöé $-30.00
+Total Volume traded (Lots)Γöé 0.03
+Win Rate                  Γöé 0.00% (0 Wins / 64 Losses)
+Gross Profit (Wins)       Γöé $0.00
+Gross Loss (Losses)       Γöé $-30.00
+Profit Factor             Γöé 0.00
+N/A
+Average Loss per Loss     Γöé $-0.47
+Max Win                   Γöé $0.00
+Max Loss                  Γöé $-15.00
+Avg Holding Time (hours)  Γöé 0.78
+Avg DCA Layers per Cycle  Γöé 0.00
+==================================================================
+
+≡ƒôê PNL BY DATE:
+------------------------------------------------------------------
+            Sum PnL  Count  Mean PnL
+date                                
+2026-07-12    -30.0      3     -10.0
+2026-07-13      0.0      7       0.0
+2026-07-14      0.0     18       0.0
+2026-07-15      0.0      8       0.0
+2026-07-16      0.0     15       0.0
+2026-07-17      0.0     13       0.0
+------------------------------------------------------------------
+
+≡ƒÆ▒ PNL BY SYMBOL:
+------------------------------------------------------------------
+        Sum PnL  Count  Mean PnL
+symbol                          
+AUDUSD      0.0      2       0.0
+BTCUSD      0.0      2       0.0
+EURUSD    -30.0      5      -6.0
+GBPUSD      0.0      1       0.0
+NZDUSD      0.0      3       0.0
+US100       0.0      1       0.0
+US30        0.0      5       0.0
+US500       0.0     12       0.0
+USDCAD      0.0      6       0.0
+USDCHF      0.0      4       0.0
+USDJPY      0.0      4       0.0
+XAUUSD      0.0     19       0.0
+------------------------------------------------------------------
+
+≡ƒº▒ PERFORMANCE BY DCA LAYERS:
+------------------------------------------------------------------
+            Sum PnL  Count  Win Rate %
+dca_layers                            
+0             -30.0     64         0.0
+------------------------------------------------------------------
+
+≡ƒô¥ INDIVIDUAL TRADES:
+------------------------------------------------------------------
+      date symbol direction  total_lots  dca_layers  profit_usd  holding_hours
+2026-07-12 EURUSD       BUY        0.01           0       -15.0           25.0
+2026-07-12 EURUSD       BUY        0.01           0       -15.0           25.0
+2026-07-12 EURUSD       BUY        0.01           0         0.0            0.0
+2026-07-13 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-13 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-13  US500      SELL        0.00           0         0.0            0.0
+2026-07-13 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-13  US500       BUY        0.00           0         0.0            0.0
+2026-07-13 BTCUSD      SELL        0.00           0         0.0            0.0
+2026-07-13 EURUSD       BUY        0.00           0         0.0            0.0
+2026-07-14 EURUSD      SELL        0.00           0         0.0            0.0
+2026-07-14 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-14 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-14 USDCAD      SELL        0.00           0         0.0            0.0
+2026-07-14 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-14 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-14  US500       BUY        0.00           0         0.0            0.0
+2026-07-14 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-14  US500      SELL        0.00           0         0.0            0.0
+2026-07-14 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-14 AUDUSD       BUY        0.00           0         0.0            0.0
+2026-07-14 USDCAD      SELL        0.00           0         0.0            0.0
+2026-07-14 USDJPY      SELL        0.00           0         0.0            0.0
+2026-07-14 USDCHF      SELL        0.00           0         0.0            0.0
+2026-07-14  US500       BUY        0.00           0         0.0            0.0
+2026-07-14   US30       BUY        0.00           0         0.0            0.0
+2026-07-14 USDJPY      SELL        0.00           0         0.0            0.0
+2026-07-14 USDJPY      SELL        0.00           0         0.0            0.0
+2026-07-15   US30       BUY        0.00           0         0.0            0.0
+2026-07-15 AUDUSD       BUY        0.00           0         0.0            0.0
+2026-07-15  US500      SELL        0.00           0         0.0            0.0
+2026-07-15   US30      SELL        0.00           0         0.0            0.0
+2026-07-15   US30      SELL        0.00           0         0.0            0.0
+2026-07-15 USDJPY      SELL        0.00           0         0.0            0.0
+2026-07-15 USDCAD       BUY        0.00           0         0.0            0.0
+2026-07-15 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-16 NZDUSD       BUY        0.00           0         0.0            0.0
+2026-07-16 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-16 GBPUSD       BUY        0.00           0         0.0            0.0
+2026-07-16  US500      SELL        0.00           0         0.0            0.0
+2026-07-16  US500       BUY        0.00           0         0.0            0.0
+2026-07-16 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-16  US500       BUY        0.00           0         0.0            0.0
+2026-07-16   US30      SELL        0.00           0         0.0            0.0
+2026-07-16 BTCUSD      SELL        0.00           0         0.0            0.0
+2026-07-16 USDCAD      SELL        0.00           0         0.0            0.0
+2026-07-16 NZDUSD      SELL        0.00           0         0.0            0.0
+2026-07-16 USDCHF       BUY        0.00           0         0.0            0.0
+2026-07-16  US100      SELL        0.00           0         0.0            0.0
+2026-07-16 USDCAD      SELL        0.00           0         0.0            0.0
+2026-07-16 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-17 USDCHF       BUY        0.00           0         0.0            0.0
+2026-07-17 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 XAUUSD       BUY        0.00           0         0.0            0.0
+2026-07-17  US500       BUY        0.00           0         0.0            0.0
+2026-07-17  US500       BUY        0.00           0         0.0            0.0
+2026-07-17 XAUUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 NZDUSD      SELL        0.00           0         0.0            0.0
+2026-07-17 USDCHF      SELL        0.00           0         0.0            0.0
+2026-07-17  US500       BUY        0.00           0         0.0            0.0
+2026-07-17 USDCAD      SELL        0.00           0         0.0            0.0
+------------------------------------------------------------------
+
+Γ¥î ERRORS / WARNINGS DURING THE WEEK:
+------------------------------------------------------------------
+[2026-07-14] [14:45:07] WARNING: MT5 initialize failed: (-6, 'Terminal: Authorization failed')
+[2026-07-14] [14:45:18] WARNING: MT5 initialize failed: (-6, 'Terminal: Authorization failed')
+[2026-07-16] [21:46:22] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:03:47] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:06:11] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:08:54] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:08:54] WARNING: Γ¥î MT5 reconnect failed after 3 attempts. Will retry next iteration.
+[2026-07-17] [00:11:23] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:13:47] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:16:30] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:16:30] WARNING: Γ¥î MT5 reconnect failed after 3 attempts. Will retry next iteration.
+[2026-07-17] [00:18:58] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:21:21] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:24:04] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:24:04] WARNING: Γ¥î MT5 reconnect failed after 3 attempts. Will retry next iteration.
+[2026-07-17] [00:26:31] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:28:54] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:31:36] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+[2026-07-17] [00:31:36] WARNING: Γ¥î MT5 reconnect failed after 3 attempts. Will retry next iteration.
+[2026-07-17] [00:34:05] WARNING: MT5 initialize failed: (-10005, 'IPC timeout')
+... and 51 more errors/warnings.
+------------------------------------------------------------------
+

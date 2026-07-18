@@ -24,5 +24,5 @@ def find_startups(log_path):
 
 if __name__ == "__main__":
     project_root = Path("d:/05_Quant/v9 Continuum")
-    find_startups(project_root / "logs" / "audit_2026-06-23.jsonl")
-    find_startups(project_root / "logs" / "audit_2026-06-24.jsonl")
+    find_startups(project_root / "logs" / "audit_2026-06-30.jsonl")
+    find_startups(project_root / "logs" / "audit_2026-07-01.jsonl")
