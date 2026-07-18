@@ -9,7 +9,8 @@ from dotenv import load_dotenv
 
 # ── Load .env ───────────────────────────────────────────────
 _project_root = Path(__file__).resolve().parent.parent
-_env_path = _project_root / ".env"
+_env_name = os.getenv("ENV_FILE", ".env")
+_env_path = _project_root / _env_name
 
 if _env_path.exists():
     load_dotenv(_env_path)
@@ -42,6 +43,7 @@ MT5_ACCOUNT: int = _int("MT5_ACCOUNT", 0)
 MT5_PASSWORD: str = _get("MT5_PASSWORD", "")
 MT5_SERVER: str = _get("MT5_SERVER", "Exness-MT5Trial7")
 MT5_PATH: str = _get("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+MAGIC_NUMBER: int = _int("MAGIC_NUMBER", 202500)
 
 # ── Trading Mode ────────────────────────────────────────────
 LIVE_TRADING: bool = _bool("LIVE_TRADING", False)
@@ -126,6 +128,16 @@ ML_LOT_BOOST_THRESHOLD: float = _float("ML_LOT_BOOST_THRESHOLD", 0.25)   # Score
 ML_LOT_REDUCE_THRESHOLD: float = _float("ML_LOT_REDUCE_THRESHOLD", 0.45) # Score > this → lot ×REDUCE
 ML_LOT_BOOST_MULTIPLIER: float = _float("ML_LOT_BOOST_MULTIPLIER", 1.5)  # ×1.5 when high confidence
 ML_LOT_REDUCE_MULTIPLIER: float = _float("ML_LOT_REDUCE_MULTIPLIER", 0.7) # ×0.7 when caution
+
+# ── Weekend Risk Mitigation ────────────────────────────────
+ENABLE_WEEKEND_LIQUIDATION: bool = _bool("ENABLE_WEEKEND_LIQUIDATION", False)
+LIQUIDATION_HOUR_UTC: int = _int("LIQUIDATION_HOUR_UTC", 20)
+
+# ── Stop Loss Multipliers ──────────────────────────────────
+SL_MULTIPLIER_FX: float = _float("SL_MULTIPLIER_FX", 4.0)
+SL_MULTIPLIER_GOLD: float = _float("SL_MULTIPLIER_GOLD", 6.0)
+SL_MULTIPLIER_CRYPTO: float = _float("SL_MULTIPLIER_CRYPTO", 6.0)
+SL_MULTIPLIER_INDEX: float = _float("SL_MULTIPLIER_INDEX", 8.0)
 
 # ── Logging ─────────────────────────────────────────────────
 LOG_DIR: str = _get("LOG_DIR", "logs")

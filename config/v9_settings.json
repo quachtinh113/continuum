@@ -1,0 +1,7 @@
+{
+  "asset": "XAUUSD",
+  "dca_multiplier": 2.3,
+  "max_layers": 3,
+  "take_profit_pct": 0.015,
+  "recovery_threshold_pct": 0.05
+}
