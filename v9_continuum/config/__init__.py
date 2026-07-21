@@ -2,11 +2,20 @@ import os
 import json
 
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
-MATRIX_PATH = os.path.join(CONFIG_DIR, "portfolio_matrix.json")
+_matrix_file = os.getenv("PORTFOLIO_MATRIX_FILE", "portfolio_matrix.json")
+if os.path.isabs(_matrix_file):
+    MATRIX_PATH = _matrix_file
+else:
+    _project_root = os.path.dirname(os.path.dirname(CONFIG_DIR))
+    _root_path = os.path.join(_project_root, _matrix_file)
+    if os.path.exists(_root_path):
+        MATRIX_PATH = _root_path
+    else:
+        MATRIX_PATH = os.path.join(CONFIG_DIR, _matrix_file)
 
 class PortfolioMatrixConfig:
-    def __init__(self, path=MATRIX_PATH):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = path or MATRIX_PATH
         self.load()
 
     def load(self):
@@ -24,5 +33,7 @@ class PortfolioMatrixConfig:
         self.news_lock_minutes = int(data.get("news_lock_minutes", 30))
         self.holding_reduce_hours = float(data.get("holding_reduce_hours", 12.0))
         self.max_holding_hours = float(data.get("max_holding_hours", 18.0))
+        val = data.get("weekend_close_hour_utc", None)
+        self.weekend_close_hour_utc = int(val) if val is not None else None
 
 matrix_config = PortfolioMatrixConfig()

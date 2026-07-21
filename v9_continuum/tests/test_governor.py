@@ -56,21 +56,27 @@ class TestV9ContinuumFramework(unittest.TestCase):
         """
         Verifies that exceeding the daily drawdown percent locks the Governor.
         """
-        active_positions = [{"symbol": "EURUSD"}]
-        current_equity = 9600.0
-        start_of_day_balance = 10000.0  # 4% Drawdown (limit is 3.0%)
-        
-        approved, msg = self.governor.evaluate_risk_matrix(
-            "GBPUSD",
-            active_positions,
-            current_equity,
-            start_of_day_balance,
-            time.time()
-        )
-        
-        self.assertFalse(approved)
-        self.assertEqual(self.governor.system_status, "LOCKED")
-        self.assertIn("KILL SWITCH TRIGGERED", msg)
+        from v9_continuum.config import matrix_config
+        original_limit = matrix_config.max_daily_drawdown_percent
+        matrix_config.max_daily_drawdown_percent = 3.0
+        try:
+            active_positions = [{"symbol": "EURUSD"}]
+            current_equity = 9600.0
+            start_of_day_balance = 10000.0  # 4% Drawdown (limit is 3.0%)
+            
+            approved, msg = self.governor.evaluate_risk_matrix(
+                "GBPUSD",
+                active_positions,
+                current_equity,
+                start_of_day_balance,
+                time.time()
+            )
+            
+            self.assertFalse(approved)
+            self.assertEqual(self.governor.system_status, "LOCKED")
+            self.assertIn("KILL SWITCH TRIGGERED", msg)
+        finally:
+            matrix_config.max_daily_drawdown_percent = original_limit
 
     # ── 3. Exposure Constraint Checks ─────────────────────────────────
 

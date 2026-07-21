@@ -82,13 +82,25 @@ class MT5Connector:
             log_error("MetaTrader5 package not installed. Install with: pip install MetaTrader5")
             return False
 
-        if not mt5.initialize(path=settings.MT5_PATH):
-            # Fallback: try auto-detect (common with Exness installations)
-            if not mt5.initialize():
+        # Target specific MT5 terminal instance and account credentials
+        initialized = mt5.initialize(
+            path=settings.MT5_PATH,
+            login=settings.MT5_ACCOUNT,
+            password=settings.MT5_PASSWORD,
+            server=settings.MT5_SERVER,
+        )
+        if not initialized:
+            # Fallback: try auto-detect with explicit account credentials
+            initialized = mt5.initialize(
+                login=settings.MT5_ACCOUNT,
+                password=settings.MT5_PASSWORD,
+                server=settings.MT5_SERVER,
+            )
+            if not initialized:
                 log_error(f"MT5 initialize failed: {mt5.last_error()}")
                 return False
 
-        # Login
+        # Double check login/authorization state
         authorized = mt5.login(
             login=settings.MT5_ACCOUNT,
             password=settings.MT5_PASSWORD,
@@ -130,6 +142,7 @@ class MT5Connector:
     def health_check(self) -> bool:
         """
         Check if MT5 terminal is still alive and responsive.
+        Retries up to 2 times to absorb temporary network jitter.
 
         Returns:
             True if terminal is healthy.
@@ -137,20 +150,21 @@ class MT5Connector:
         if not MT5_AVAILABLE or not self._connected:
             return False
 
-        try:
-            info = mt5.terminal_info()
-            if info is None:
-                return False
-            # Check if terminal is connected to trade server
-            return info.connected
-        except Exception:
-            return False
+        for _ in range(2):
+            try:
+                info = mt5.terminal_info()
+                if info is not None and info.connected:
+                    return True
+            except Exception:
+                pass
+            time.sleep(1)
+        return False
 
     def ensure_connected(self) -> bool:
         """
         Ensure MT5 connection is alive. Auto-reconnect if needed.
 
-        Uses exponential backoff: e.g., 5s, 10s, 30s between retries.
+        Uses soft re-login first before attempting full backoff reconnect to avoid DLL crashes.
 
         Returns:
             True if connected (either already was or successfully reconnected).
@@ -158,14 +172,22 @@ class MT5Connector:
         if self.health_check():
             return True
 
-        log_info("⚠️ MT5 connection lost. Attempting auto-reconnect...")
+        log_info("⚠️ MT5 connection lost or unstable. Attempting auto-reconnect...")
 
-        # Shutdown existing connection cleanly
+        # Soft re-authorization first
         if MT5_AVAILABLE:
             try:
-                mt5.shutdown()
+                if mt5.login(
+                    login=settings.MT5_ACCOUNT,
+                    password=settings.MT5_PASSWORD,
+                    server=settings.MT5_SERVER,
+                ):
+                    self._connected = True
+                    log_info("✅ MT5 soft re-authorization successful.")
+                    return True
             except Exception:
                 pass
+
         self._connected = False
 
         # Retry with backoff
@@ -399,7 +421,7 @@ class MT5Connector:
             "type": mt5.ORDER_TYPE_BUY if order_type == "BUY" else mt5.ORDER_TYPE_SELL,
             "price": price,
             "deviation": 20,
-            "magic": 202500,
+            "magic": settings.MAGIC_NUMBER,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
@@ -426,13 +448,18 @@ class MT5Connector:
         )
         return result.order
 
-    def close_order(self, ticket: int, symbol: str) -> bool:
+    def close_order(self, ticket: int, symbol: str, max_retries: int = 3) -> bool:
         """
-        Close a position by ticket.
+        Close a position by ticket with retry logic for transient errors.
+
+        Retries on: Requote (10004), No Connection (10007), Timeout (10012),
+        Market Closed (10018), and other transient failures.
+        Fails immediately on: position not found, invalid parameters.
 
         Args:
             ticket: Order ticket number
             symbol: Symbol key
+            max_retries: Maximum retry attempts (default 3)
 
         Returns:
             True if closed successfully.
@@ -443,46 +470,87 @@ class MT5Connector:
 
         mt5_symbol = get_mt5_name(symbol)
 
-        # Get position info
-        position = mt5.positions_get(ticket=ticket)
-        if position is None or len(position) == 0:
-            log_error(f"Position not found: ticket={ticket}")
-            return False
-
-        pos = position[0]
-        close_type = (
-            mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY
-            else mt5.ORDER_TYPE_BUY
-        )
-
-        tick = mt5.symbol_info_tick(mt5_symbol)
-        close_price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
-
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": mt5_symbol,
-            "volume": pos.volume,
-            "type": close_type,
-            "position": ticket,
-            "price": close_price,
-            "deviation": 20,
-            "magic": 202500,
-            "comment": "NowTrading2.0 Close",
-            "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+        # Transient retcodes worth retrying
+        _RETRYABLE_CODES = {
+            10004,  # TRADE_RETCODE_REQUOTE
+            10007,  # TRADE_RETCODE_CONNECTION
+            10012,  # TRADE_RETCODE_TIMEOUT
+            10018,  # TRADE_RETCODE_MARKET_CLOSED
+            10024,  # TRADE_RETCODE_TOO_MANY_REQUESTS
         }
+        _RETRY_DELAYS = [1, 3, 5]  # seconds between retries
 
-        result = mt5.order_send(request)
+        for attempt in range(1, max_retries + 1):
+            # Get position info
+            position = mt5.positions_get(ticket=ticket)
+            if position is None or len(position) == 0:
+                if attempt == 1:
+                    # First attempt: position genuinely not found
+                    log_error(f"Position not found: ticket={ticket} (may already be closed)")
+                else:
+                    # Subsequent attempt: position was closed by previous attempt
+                    log_info(f"✅ Position ticket={ticket} confirmed closed after retry.")
+                return True  # True if closed or already non-existent
 
-        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-            log_error(
-                f"Close failed for ticket {ticket}",
-                retcode=result.retcode if result else "None",
+            pos = position[0]
+            if pos.magic != settings.MAGIC_NUMBER:
+                log_error(f"Cannot close position ticket={ticket}: Magic number mismatch (position has {pos.magic}, expected {settings.MAGIC_NUMBER})")
+                return False
+
+            close_type = (
+                mt5.ORDER_TYPE_SELL if pos.type == mt5.ORDER_TYPE_BUY
+                else mt5.ORDER_TYPE_BUY
             )
-            return False
 
-        log_info(f"🔴 POSITION CLOSED │ Ticket: {ticket} │ {symbol} │ P&L: ${pos.profit:.2f}")
-        return True
+            tick = mt5.symbol_info_tick(mt5_symbol)
+            if tick is None:
+                log_error(f"Cannot get tick for {mt5_symbol} during close attempt {attempt}/{max_retries}")
+                if attempt < max_retries:
+                    time.sleep(_RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)])
+                continue
+
+            close_price = tick.bid if pos.type == mt5.ORDER_TYPE_BUY else tick.ask
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": mt5_symbol,
+                "volume": pos.volume,
+                "type": close_type,
+                "position": ticket,
+                "price": close_price,
+                "deviation": 30,  # Wider deviation for low-liquidity close
+                "magic": settings.MAGIC_NUMBER,
+                "comment": "V9 Continuum Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+
+            result = mt5.order_send(request)
+
+            if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
+                log_info(f"🔴 POSITION CLOSED │ Ticket: {ticket} │ {symbol} │ P&L: ${pos.profit:.2f}")
+                return True
+
+            # Handle failure
+            retcode = result.retcode if result else None
+            comment = result.comment if result else "No result"
+
+            if retcode in _RETRYABLE_CODES and attempt < max_retries:
+                delay = _RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)]
+                log_info(
+                    f"⚠️ Close retry {attempt}/{max_retries} for ticket {ticket} │ "
+                    f"Retcode: {retcode} ({comment}) │ Retrying in {delay}s..."
+                )
+                time.sleep(delay)
+            else:
+                log_error(
+                    f"Close failed for ticket {ticket} after {attempt} attempt(s)",
+                    retcode=retcode,
+                    comment=comment,
+                )
+                return False
+
+        return False
 
     def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
         """
@@ -517,6 +585,7 @@ class MT5Connector:
                 "comment": pos.comment,
             }
             for pos in positions
+            if pos.magic == settings.MAGIC_NUMBER
         ]
 
     def get_daily_profit(self) -> float:
@@ -535,3 +604,31 @@ class MT5Connector:
 
         # Current unrealized P&L
         return account.profit
+
+    def cancel_all_pending_orders(self) -> int:
+        """
+        Cancel all active pending orders on the MT5 account.
+        """
+        if not self._connected:
+            return 0
+        if self._dry_run:
+            return 0
+            
+        orders = mt5.orders_get()
+        if not orders:
+            return 0
+            
+        cancelled = 0
+        for order in orders:
+            request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": order.ticket,
+            }
+            res = mt5.order_send(request)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                cancelled += 1
+            else:
+                ret = res.retcode if res else "None"
+                log_error(f"Failed to cancel pending order {order.ticket} | retcode={ret}")
+        return cancelled
+

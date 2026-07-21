@@ -21,7 +21,7 @@ class MLGatekeeper:
     # Feature order must match training schema exactly
     _FEATURE_COLS = ['RSI_Delta', 'Volatility_Index', 'Session_Code', 'RSI_H1_Div', 'Trend_Vol_Ratio', 'RSI_M15', 'RSI_H1', 'RSI_H4', 'ADX', 'ATR', 'hour']
 
-    def __init__(self, model_path: str = "src/ml/gatekeeper_v1.model"):
+    def __init__(self, model_path: str = "src/ml/gatekeeper_v1.json"):
         self.model_path = model_path
         self.model = None
         self.is_ready = False
@@ -34,8 +34,14 @@ class MLGatekeeper:
     def _load_model(self):
         """Loads the XGBoost model from disk if it exists."""
         try:
+            import os
+            target_path = self.model_path
+            json_alt = target_path.replace(".model", ".json")
+            if target_path.endswith(".model") and os.path.exists(json_alt):
+                target_path = json_alt
+
             self.model = xgb.Booster()
-            self.model.load_model(self.model_path)
+            self.model.load_model(target_path)
             self.is_ready = True
             log_info("✅ ML Gatekeeper model loaded successfully.")
         except Exception as e:

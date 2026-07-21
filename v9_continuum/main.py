@@ -10,8 +10,9 @@ import numpy as np
 # Add workspace to path to allow importing from workspace root
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from config import settings
 from src.mt5_connector import MT5Connector
-from src.session_manager import get_current_session, is_weekend, Session
+from src.session_manager import get_current_session, is_weekend, is_market_closing_soon, Session
 from src.audit_logger import log_info, log_error, log_decision, log_cycle_event
 
 class RiskDecision:
@@ -70,6 +71,18 @@ class V9ContinuumBot:
         # Fallback to a core set if empty
         if not self.symbols:
             self.symbols = ["XAUUSD", "EURUSD", "GBPUSD", "US30", "US100"]
+
+    def get_hard_sl_multiplier(self, category: str) -> float:
+        """Get Hard SL multiplier based on symbol's category."""
+        if category == "FX":
+            return settings.SL_MULTIPLIER_FX
+        elif category == "GOLD":
+            return settings.SL_MULTIPLIER_GOLD
+        elif category == "CRYPTO":
+            return settings.SL_MULTIPLIER_CRYPTO
+        elif category == "INDEX":
+            return settings.SL_MULTIPLIER_INDEX
+        return 4.0
 
     def update_daily_balance(self, current_balance: float):
         """Resets the start of day balance on day changes."""
@@ -257,12 +270,19 @@ class V9ContinuumBot:
                 equity, winner["atr"], symbol, risk_percent=0.15, ml_score=winner.get("loss_prob")
             )
             
+            # Hard-SL based on Asset Class multiplier for catastrophic VPS crash backup
+            from config.symbols import get_symbol_spec
+            spec = get_symbol_spec(symbol)
+            multiplier = self.get_hard_sl_multiplier(spec.category)
+            hard_sl_distance = multiplier * winner["atr"]
+            hard_sl = winner["price"] - hard_sl_distance if winner["direction"] == "BUY" else winner["price"] + hard_sl_distance
+            
             ticket = self.execution.route_order(
                 symbol=symbol,
                 order_type=winner["direction"],
                 lot=lot_size,
-                tp=None, # TP and SL handled dynamically by event loop target updates
-                sl=None,
+                tp=None, 
+                sl=hard_sl,
                 comment="V9 Continuum Base"
             )
             
@@ -280,7 +300,8 @@ class V9ContinuumBot:
                     "is_extended": False,
                     "features": winner.get("features"),
                     "last_tick": {"spread_pips": winner["spread"]},
-                    "be_activated": False
+                    "trailing_active": False,
+                    "extreme_price": winner["price"]
                 }
                 log_info(f"🚀 Base cycle opened for {symbol} ({winner['direction']}) at {winner['price']}")
                 log_cycle_event("CYCLE_OPEN", symbol, winner["direction"], {"price": winner["price"], "lot": lot_size, "ticket": ticket})
@@ -325,6 +346,20 @@ class V9ContinuumBot:
                 continue
             
             current_price = tick["ask"] if cycle["direction"] == "BUY" else tick["bid"]
+            
+            # Sync with broker: if position is closed externally (SL/TP or manually)
+            if cycle["ticket"] != -1 and cycle["ticket"] not in positions_map:
+                log_info(f"🔄 Active cycle for {symbol} (ticket {cycle['ticket']}) was closed externally (SL/TP or manually). Cleaning up local state.")
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "EXTERNAL_CLOSE")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "EXTERNAL_CLOSE"})
+                self.active_cycles.pop(symbol, None)
+                continue
+            
+            # Update extreme price for trailing BE
+            if cycle["direction"] == "BUY":
+                cycle["extreme_price"] = max(cycle.get("extreme_price", current_price), current_price)
+            else:
+                cycle["extreme_price"] = min(cycle.get("extreme_price", current_price), current_price)
             
             # Fetch unrealized profit from broker
             # Fallback estimation if dry run
@@ -375,7 +410,32 @@ class V9ContinuumBot:
                 symbols_to_delete.append(symbol)
                 continue
 
-            # ── 1.5. Break-Even Check (Relaxed BE logic) ──
+            # ── 1.4. Soft ATR Stop Check (2.6 * ATR Dynamic Stop) ──
+            rates_h1_sl = self.connector.get_rates(symbol, "H1", 100)
+            if rates_h1_sl is not None and not rates_h1_sl.empty:
+                atr_series_sl = rates_h1_sl["close"].diff().abs().rolling(14).mean()
+                current_atr_sl = float(atr_series_sl.iloc[-1]) if not atr_series_sl.empty else cycle["atr"]
+            else:
+                current_atr_sl = cycle["atr"]
+
+            soft_stop_distance = 2.6 * current_atr_sl
+            is_sl_hit = False
+            if cycle["direction"] == "BUY" and current_price <= (avg_entry_price - soft_stop_distance):
+                is_sl_hit = True
+            elif cycle["direction"] == "SELL" and current_price >= (avg_entry_price + soft_stop_distance):
+                is_sl_hit = True
+
+            if is_sl_hit:
+                log_info(f"🚨 Soft ATR Stop triggered for {symbol} at {current_price:.5f} (Distance: {soft_stop_distance:.5f} from Avg Entry: {avg_entry_price:.5f}). Closing cycle!")
+                self.execution.close_position(cycle["ticket"], symbol)
+                for dca in cycle["dca_layers"]:
+                    self.execution.close_position(dca["ticket"], symbol)
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "SOFT_ATR_STOP")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "SOFT_ATR_STOP"})
+                symbols_to_delete.append(symbol)
+                continue
+
+            # ── 1.5. Trailing Break-Even Check ──
             # Fetch H1 indicators for current ATR
             rates_h1_be = self.connector.get_rates(symbol, "H1", 100)
             if rates_h1_be is not None and not rates_h1_be.empty:
@@ -392,39 +452,102 @@ class V9ContinuumBot:
                 if not swing_highs.empty and not swing_lows.empty:
                     last_swing_high = float(swing_highs.iloc[-1])
                     last_swing_low = float(swing_lows.iloc[-1])
-                    if cycle["direction"] == "BUY" and current_price >= last_swing_high:
+                    if cycle["direction"] == "BUY" and last_swing_high > avg_entry_price and current_price >= last_swing_high:
                         minor_liq_swept = True
-                    elif cycle["direction"] == "SELL" and current_price <= last_swing_low:
+                    elif cycle["direction"] == "SELL" and last_swing_low < avg_entry_price and current_price <= last_swing_low:
                         minor_liq_swept = True
 
-            activation_distance = 1.5 * current_atr_be
-            buffer_distance = 0.0 # Exit at entry price exactly
+            # Configuration from Backtest (Task-1096 Tuned)
+            activation_distance = 2.5 * current_atr_be
+            floor_offset = 0.5 * current_atr_be
+            trail_gap = 1.2 * current_atr_be
 
-            is_be_triggered = False
+            is_trailing_exit = False
             if cycle["direction"] == "BUY":
-                if not cycle.get("be_activated", False) and (current_price >= avg_entry_price + activation_distance or minor_liq_swept):
-                    cycle["be_activated"] = True
-                    log_info(f"🛡️ BE Activated for BUY {symbol} (Price {current_price:.5f} >= {avg_entry_price + activation_distance:.5f} or Liq Swept)")
+                if not cycle.get("trailing_active", False) and (current_price >= avg_entry_price + activation_distance or minor_liq_swept):
+                    cycle["trailing_active"] = True
+                    log_info(f"🛡️ Trailing BE Activated for BUY {symbol} (Price {current_price:.5f} >= {avg_entry_price + activation_distance:.5f} or Liq Swept)")
                 
-                if cycle.get("be_activated", False) and current_price <= avg_entry_price + buffer_distance:
-                    is_be_triggered = True
+                if cycle.get("trailing_active", False):
+                    computed_stop = cycle["extreme_price"] - trail_gap
+                    floor_stop = avg_entry_price + floor_offset
+                    final_trailing_stop = max(computed_stop, floor_stop)
+                    if current_price <= final_trailing_stop:
+                        is_trailing_exit = True
+                        cycle["be_exit_price"] = final_trailing_stop
             else: # SELL
-                if not cycle.get("be_activated", False) and (current_price <= avg_entry_price - activation_distance or minor_liq_swept):
-                    cycle["be_activated"] = True
-                    log_info(f"🛡️ BE Activated for SELL {symbol} (Price {current_price:.5f} <= {avg_entry_price - activation_distance:.5f} or Liq Swept)")
+                if not cycle.get("trailing_active", False) and (current_price <= avg_entry_price - activation_distance or minor_liq_swept):
+                    cycle["trailing_active"] = True
+                    log_info(f"🛡️ Trailing BE Activated for SELL {symbol} (Price {current_price:.5f} <= {avg_entry_price - activation_distance:.5f} or Liq Swept)")
                 
-                if cycle.get("be_activated", False) and current_price >= avg_entry_price - buffer_distance:
-                    is_be_triggered = True
+                if cycle.get("trailing_active", False):
+                    computed_stop = cycle["extreme_price"] + trail_gap
+                    floor_stop = avg_entry_price - floor_offset
+                    final_trailing_stop = min(computed_stop, floor_stop)
+                    if current_price >= final_trailing_stop:
+                        is_trailing_exit = True
+                        cycle["be_exit_price"] = final_trailing_stop
 
-            if is_be_triggered:
-                log_info(f"🛡️ Break-Even exit triggered for {symbol}. Closing cycle!")
+            if is_trailing_exit:
+                be_fill = cycle.get("be_exit_price", avg_entry_price)
+                log_info(f"🛡️ Trailing Break-Even exit triggered for {symbol} at {be_fill:.5f}. Closing cycle!")
                 self.execution.close_position(cycle["ticket"], symbol)
                 for dca in cycle["dca_layers"]:
                     self.execution.close_position(dca["ticket"], symbol)
-                self.record_closed_cycle_to_training_data(cycle, current_price, now, "BREAK_EVEN")
-                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "BREAK_EVEN"})
+                self.record_closed_cycle_to_training_data(cycle, current_price, now, "TRAILING_BE_EXIT")
+                log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "TRAILING_BE_EXIT"})
                 symbols_to_delete.append(symbol)
                 continue
+
+            # ── 1.5 High-Frequency ML Risk Check (Soft SL) ──
+            if cycle["holding_hours"] >= 1.0:
+                current_m5_bar = now.minute // 5
+                if current_m5_bar != cycle.get("last_m5_bar"):
+                    cycle["last_m5_bar"] = current_m5_bar
+                    
+                    # Fetch indicators for ML risk evaluation
+                    rates_m15_ex = self.connector.get_rates(symbol, "M15", 100)
+                    rates_h1_ex = self.connector.get_rates(symbol, "H1", 100)
+                    rates_h4_ex = self.connector.get_rates(symbol, "H4", 100)
+                    
+                    rsi_m15_ex = float(calculate_rsi(rates_m15_ex["close"]).iloc[-1]) if rates_m15_ex is not None and not rates_m15_ex.empty else 50.0
+                    rsi_h1_ex = float(calculate_rsi(rates_h1_ex["close"]).iloc[-1]) if rates_h1_ex is not None and not rates_h1_ex.empty else 50.0
+                    rsi_h4_ex = float(calculate_rsi(rates_h4_ex["close"]).iloc[-1]) if rates_h4_ex is not None and not rates_h4_ex.empty else 50.0
+                    
+                    adx_series_ex = calculate_adx(rates_h1_ex["high"], rates_h1_ex["low"], rates_h1_ex["close"]) if rates_h1_ex is not None and not rates_h1_ex.empty else pd.Series()
+                    adx_val_ex = float(adx_series_ex.iloc[-1]) if not adx_series_ex.empty else 25.0
+                    
+                    session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
+                    feat = {
+                        "RSI_M15": rsi_m15_ex,
+                        "RSI_H1": rsi_h1_ex,
+                        "RSI_H4": rsi_h4_ex,
+                        "ADX": adx_val_ex,
+                        "ATR": cycle["atr"],
+                        "RSI_Delta": rsi_h4_ex - rsi_m15_ex,
+                        "Volatility_Index": cycle["atr"] / current_price,
+                        "hour": now.hour,
+                        "Session_Code": session_map.get(session.value if hasattr(session, "value") else str(session), -1),
+                        "RSI_H1_Div": abs(rsi_h1_ex - 50.0),
+                        "Trend_Vol_Ratio": adx_val_ex * cycle["atr"]
+                    }
+                    risk_score = self.ml_engine.predict_loss_probability(feat)
+                    
+                    if risk_score > 0.70:
+                        cycle["high_risk_m5_count"] = cycle.get("high_risk_m5_count", 0) + 1
+                        log_info(f"⚠️ {symbol} High Risk Detected ({risk_score:.2f}) - M5 Count: {cycle['high_risk_m5_count']}/3")
+                    else:
+                        cycle["high_risk_m5_count"] = 0
+                        
+                    if cycle.get("high_risk_m5_count", 0) >= 3:
+                        log_info(f"🚨 Soft ML SL triggered for {symbol} after 3 consecutive high-risk M5 bars. Closing cycle!")
+                        self.execution.close_position(cycle["ticket"], symbol)
+                        for dca in cycle["dca_layers"]:
+                            self.execution.close_position(dca["ticket"], symbol)
+                        self.record_closed_cycle_to_training_data(cycle, current_price, now, "SOFT_ML_SL")
+                        log_cycle_event("CYCLE_CLOSE", symbol, cycle["direction"], {"price": current_price, "reason": "SOFT_ML_SL"})
+                        symbols_to_delete.append(symbol)
+                        continue
 
             # ── 2. Cognitive ML Time-Cutoff (12H Rule Upgrade) ──
             if cycle["holding_hours"] >= matrix_config.holding_reduce_hours:
@@ -506,30 +629,51 @@ class V9ContinuumBot:
             elif symbol in ["US500", "US100", "BTCUSD"]:
                 dca_multiplier = 1.5
 
-            # Progressive steps: Layer 1 = 1.5 * ATR, Layer 2 = 4.0 * ATR, Layer 3 = 8.0 * ATR from entry
-            step_multipliers = [1.5, 4.0, 8.0]
+            # Progressive steps: Layer 1 = 1.5 * ATR, Layer 2 = 2.5 * ATR
+            step_multipliers = [1.5, 2.5]
             current_layer_idx = len(cycle["dca_layers"])
-            if current_layer_idx < len(step_multipliers):
-                spacing_price = current_atr_dca * step_multipliers[current_layer_idx] * dca_multiplier
-            else:
-                spacing_price = current_atr_dca * 8.0 * dca_multiplier
-
-            # Check if price moved against us by spacing distance from entry price
-            entry_price = cycle["entry_price"]
             should_dca = False
-            
-            if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price):
-                should_dca = True
-            elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
-                should_dca = True
+            spacing_price = 0.0
+
+            if current_layer_idx < 2:
+                # Layers 1-2: Passive distance-based DCA
+                spacing_price = current_atr_dca * step_multipliers[current_layer_idx] * dca_multiplier
+                entry_price = cycle["entry_price"]
+                if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price):
+                    should_dca = True
+                elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
+                    should_dca = True
+            elif current_layer_idx == 2:
+                # Layer 3: Regime-driven (Requires 3.0 * ATR distance AND Liquidity Sweep)
+                l3_min_dist = 3.0 * current_atr_dca * dca_multiplier
+                price_dist_from_entry = abs(current_price - cycle["entry_price"])
+                if price_dist_from_entry >= l3_min_dist and minor_liq_swept:
+                    should_dca = True
 
             if should_dca and len(cycle["dca_layers"]) < 3:  # Hard limit 3 layers
+                # Check weekend liquidation phase 2
+                from src.session_manager import get_weekend_liquidation_phase
+                dca_phase = get_weekend_liquidation_phase(now, settings.LIQUIDATION_HOUR_UTC) if settings.ENABLE_WEEKEND_LIQUIDATION else 0
+                if dca_phase >= 2:
+                    log_info(f"🔒 Weekend Liquidation Phase 2 Active: DCA layer blocked for {symbol}.")
+                    continue
+
                 # Place DCA order
                 dca_lot = self.execution.normalize_lot(symbol, cycle["base_lot"])
+                
+                # Hard-SL based on Asset Class multiplier for DCA backup
+                from config.symbols import get_symbol_spec
+                spec = get_symbol_spec(symbol)
+                multiplier = self.get_hard_sl_multiplier(spec.category)
+                hard_sl_distance = multiplier * cycle["atr"]
+                hard_sl = current_price - hard_sl_distance if cycle["direction"] == "BUY" else current_price + hard_sl_distance
+                
                 dca_ticket = self.execution.route_order(
                     symbol=symbol,
                     order_type=cycle["direction"],
                     lot=dca_lot,
+                    tp=None,
+                    sl=hard_sl,
                     comment=f"V9 Continuum DCA L{len(cycle['dca_layers']) + 1}"
                 )
                 
@@ -608,6 +752,22 @@ class V9ContinuumBot:
                 else:
                     atr_val = 0.001
                 
+                # State Hydration: Reconstruct extreme_price from history
+                extreme_p = entry_price
+                rates_recovery = self.connector.get_rates(internal_symbol, "M15", 500)
+                if rates_recovery is not None and not rates_recovery.empty:
+                    try:
+                        # Filter candles after entry time
+                        entry_ts = entry_time.replace(tzinfo=None)
+                        post_entry = rates_recovery[rates_recovery.index >= entry_ts]
+                        if not post_entry.empty:
+                            if direction == "BUY":
+                                extreme_p = max(entry_price, float(post_entry['high'].max()))
+                            else:
+                                extreme_p = min(entry_price, float(post_entry['low'].min()))
+                    except Exception:
+                        pass # Fallback to entry_price
+
                 # Open base cycle
                 self.active_cycles[internal_symbol] = {
                     "symbol": internal_symbol,
@@ -620,9 +780,10 @@ class V9ContinuumBot:
                     "holding_hours": (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0,
                     "atr": atr_val,
                     "is_extended": False,
-                    "be_activated": False
+                    "trailing_active": False,
+                    "extreme_price": extreme_p
                 }
-                log_info(f"🔄 Recovered Base Cycle for {internal_symbol} (Direction: {direction}, Ticket: {ticket})")
+                log_info(f"🔄 Recovered Base Cycle for {internal_symbol} (Direction: {direction}, Ticket: {ticket}, Extreme: {extreme_p:.5f})")
 
     def record_closed_cycle_to_training_data(self, cycle: Dict[str, Any], exit_price: float, current_time: datetime, reason: str):
         """
@@ -693,17 +854,70 @@ class V9ContinuumBot:
         else:
             df_new.to_csv(csv_path, index=False)
 
-    def close_all_positions(self):
-        """Emergency closes all positions."""
+    def close_all_positions(self) -> int:
+        """
+        Close all active positions with result tracking.
+        
+        Only removes successfully closed cycles from active_cycles.
+        Positions that fail to close remain tracked so the bot can retry later.
+
+        Returns:
+            Number of positions that failed to close (0 = all closed).
+        """
+        if not self.active_cycles:
+            return 0
+
+        closed_symbols = []
+        failed_count = 0
+        total_tickets = 0
+
         for symbol, cycle in list(self.active_cycles.items()):
-            self.execution.close_position(cycle["ticket"], symbol)
+            all_closed = True
+            total_tickets += 1
+
+            # Close base position
+            if not self.execution.close_position(cycle["ticket"], symbol):
+                log_error(f"❌ Failed to close base ticket {cycle['ticket']} for {symbol}")
+                all_closed = False
+                failed_count += 1
+
+            # Close DCA layers
             for dca in cycle["dca_layers"]:
-                self.execution.close_position(dca["ticket"], symbol)
-        self.active_cycles.clear()
-        log_info("🚨 All positions closed successfully.")
+                total_tickets += 1
+                if not self.execution.close_position(dca["ticket"], symbol):
+                    log_error(f"❌ Failed to close DCA ticket {dca['ticket']} for {symbol}")
+                    all_closed = False
+                    failed_count += 1
+
+            if all_closed:
+                closed_symbols.append(symbol)
+
+        # Only remove successfully closed cycles
+        for symbol in closed_symbols:
+            self.active_cycles.pop(symbol, None)
+
+        if failed_count == 0:
+            log_info(f"🚨 All {total_tickets} position(s) closed successfully.")
+        else:
+            log_error(
+                f"⚠️ Close summary: {total_tickets - failed_count}/{total_tickets} closed, "
+                f"{failed_count} FAILED (still tracked for retry)."
+            )
+
+        return failed_count
 
     def run(self):
         """Starts the main trading loop."""
+        # Write PID to file for watchdog tracking
+        import os
+        from pathlib import Path
+        pid_file = Path("logs/bot.pid")
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        except Exception as e:
+            log_error(f"Failed to write PID file: {e}")
+
         sig.signal(sig.SIGINT, _shutdown_handler)
         sig.signal(sig.SIGTERM, _shutdown_handler)
         
@@ -724,8 +938,50 @@ class V9ContinuumBot:
 
         while _running:
             try:
+                # ── Heartbeat Monitor ──
+                import time
+                from pathlib import Path
+                prefix = f"bot_{settings.MAGIC_NUMBER}_" if getattr(settings, "MAGIC_NUMBER", 202500) != 202500 else ""
+                heartbeat_file = Path("logs") / f"{prefix}heartbeat.txt"
+                heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(heartbeat_file, "w", encoding="utf-8") as f:
+                    f.write(str(int(time.time())))
+                    
                 now_utc = datetime.now(timezone.utc)
                 
+                # ── Weekend Liquidation Engine (3-Phase Risk Mitigation) ──
+                liquidation_phase = 0
+                if settings.ENABLE_WEEKEND_LIQUIDATION:
+                    from src.session_manager import get_weekend_liquidation_phase
+                    liquidation_phase = get_weekend_liquidation_phase(now_utc, settings.LIQUIDATION_HOUR_UTC)
+                
+                if liquidation_phase > 0:
+                    log_info(f"⏳ Weekend Liquidation Active: Phase {liquidation_phase}")
+                    
+                    # Phase 2: Cancel pending orders
+                    if liquidation_phase >= 2:
+                        cancelled = self.connector.cancel_all_pending_orders()
+                        if cancelled > 0:
+                            log_info(f"Phase 2 Liquidation: Cancelled {cancelled} pending orders on broker.")
+                            
+                    # Phase 3: Force close all positions
+                    if liquidation_phase == 3:
+                        if self.active_cycles:
+                            log_info(
+                                f"🚨 Weekend Liquidation Phase 3: Friday {now_utc.strftime('%H:%M')} UTC — "
+                                f"Closing all {len(self.active_cycles)} active cycle(s) to avoid Weekend Gap risk."
+                            )
+                            failed = self.close_all_positions()
+                            if failed > 0:
+                                log_error(f"⚠️ {failed} position(s) failed to close. Retrying in 60s...")
+                                time.sleep(60)
+                            else:
+                                log_info("✅ All positions closed successfully before weekend. Bot entering standby.")
+                                time.sleep(300)
+                        else:
+                            time.sleep(300)
+                        continue
+
                 # Check for weekend closed market
                 if is_weekend(now_utc):
                     time.sleep(30)
@@ -733,7 +989,8 @@ class V9ContinuumBot:
 
                 session = get_current_session(now_utc)
                 if session == Session.OFF:
-                    time.sleep(60)
+                    # Session Freezing: Do not manage cycles, avoid MARKET_CLOSED errors.
+                    time.sleep(30)
                     continue
 
                 # Ensure MT5 is connected
@@ -748,14 +1005,19 @@ class V9ContinuumBot:
 
                 # Run core steps
                 self.ml_engine.reload_if_modified()
-                self.process_signals(session)
+                if liquidation_phase < 1:
+                    self.process_signals(session)
+                else:
+                    log_info("🔒 Weekend Liquidation Phase 1 Active: Signal processing suspended (New Entries Blocked).")
                 self.manage_cycles()
 
-                # High performance sleep interval (10 seconds)
-                time.sleep(10)
+                # High performance sleep interval (10 seconds) with random jitter to prevent loop synchronization collisions
+                import random
+                time.sleep(10 + random.uniform(0.1, 0.9))
             except Exception as e:
                 log_error(f"Error in trading loop: {e}")
-                time.sleep(10)
+                import random
+                time.sleep(10 + random.uniform(0.1, 0.9))
 
         # Shutdown
         self.close_all_positions()
@@ -764,5 +1026,15 @@ class V9ContinuumBot:
 
 
 if __name__ == "__main__":
-    bot = V9ContinuumBot()
-    bot.run()
+    try:
+        bot = V9ContinuumBot()
+        bot.run()
+    except BaseException as e:
+        import traceback
+        err_msg = f"🔥 CRITICAL UNHANDLED BOT EXCEPTION: {e}\n{traceback.format_exc()}"
+        print(err_msg, file=sys.stderr)
+        try:
+            log_error(err_msg)
+        except Exception:
+            pass
+        sys.exit(1)

@@ -37,14 +37,33 @@ class PositionSizer:
         raw_lot = risk_usd / (sl_distance * spec.contract_size)
 
         # Apply ML scaling for INDEX or FX if ml_score is provided
+        from config import settings
         if ml_score is not None and spec.category in ["FX", "INDEX"]:
-            from config import settings
             if ml_score < getattr(settings, "ML_LOT_BOOST_THRESHOLD", 0.25):
                 raw_lot = raw_lot * getattr(settings, "ML_LOT_BOOST_MULTIPLIER", 1.5)
             elif ml_score > getattr(settings, "ML_LOT_REDUCE_THRESHOLD", 0.45):
                 raw_lot = raw_lot * getattr(settings, "ML_LOT_REDUCE_MULTIPLIER", 0.7)
 
-        return max(0.01, float(raw_lot))
+        # Giới hạn Lot size trần (Cap logic) theo nhóm tài sản trên mỗi $1000 Equity
+        # Nhằm bảo vệ tài khoản khi biến động ATR quá hẹp (sideway tích lũy)
+        category_caps = {
+            "FX": 0.10,      # Tối đa 0.10 lots / $1000 equity
+            "INDEX": 0.05,   # Tối đa 0.05 lots / $1000 equity (Ngăn chặn sự cố US500)
+            "GOLD": 0.02,    # Tối đa 0.02 lots / $1000 equity
+            "CRYPTO": 0.05   # Tối đa 0.05 lots / $1000 equity
+        }
+        
+        category = spec.category
+        base_cap = category_caps.get(category, 0.05)
+        scaled_cap = base_cap * (equity / 1000.0)
+        
+        # Đồng thời tuân thủ cấu hình MAX_LOT_SIZE toàn hệ thống
+        global_max_lot = getattr(settings, "MAX_LOT_SIZE", 0.10)
+        
+        final_cap = min(scaled_cap, global_max_lot)
+        final_lot = min(raw_lot, final_cap)
+
+        return max(0.01, float(final_lot))
 
     def calculate_target_exit_price(
         self,

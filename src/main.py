@@ -454,7 +454,8 @@ class NowTradingBot:
                     if settings.ML_MODE == "AUDIT_ENABLED":
                         # Audit log it
                         import json
-                        with open("logs/ml_veto_audit.jsonl", "a") as f:
+                        prefix = f"bot_{settings.MAGIC_NUMBER}_" if getattr(settings, "MAGIC_NUMBER", 202500) != 202500 else ""
+                        with open(f"logs/{prefix}ml_veto_audit.jsonl", "a") as f:
                             f.write(json.dumps({
                                 "timestamp": now.isoformat(),
                                 "symbol": symbol,

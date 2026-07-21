@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  v9_app:
+    build: .
+    container_name: v9_continuum_containerized
+    restart: always
+    environment:
+      - ENV=production
+      - DISPLAY=:1
+    volumes:
+      # Giu lai nhat ky giao dich va trang thai chu ky bot
+      - ./logs:/app/logs
+      - ./v9_continuum/config:/app/v9_continuum/config
+      # Giu lai du lieu lich su, cau hinh tai khoan cua MT5 ben trong Wine
+      - wine_data:/root/.wine/drive_c/Program Files/MetaTrader 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  wine_data:

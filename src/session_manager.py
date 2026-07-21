@@ -106,6 +106,66 @@ def is_weekend(utc_time: Optional[datetime] = None) -> bool:
     return False
 
 
+def get_weekend_liquidation_phase(utc_time: Optional[datetime] = None, liquidation_hour: int = 20) -> int:
+    """
+    Determine the weekend liquidation phase on Friday (UTC):
+    - Phase 0: Normal trading (before liquidation_hour - 2)
+    - Phase 1: Block new entries (between liquidation_hour - 2 and liquidation_hour - 0.5)
+    - Phase 2: Cancel pending/DCA orders (between liquidation_hour - 0.5 and liquidation_hour)
+    - Phase 3: Force close all positions (at/after liquidation_hour)
+    """
+    if utc_time is None:
+        utc_time = datetime.now(timezone.utc)
+    
+    weekday = utc_time.weekday()  # 4 = Friday
+    
+    if weekday != 4:
+        return 0
+        
+    hour = utc_time.hour
+    minute = utc_time.minute
+    time_float = hour + minute / 60.0
+    
+    if time_float >= liquidation_hour:
+        return 3
+    elif time_float >= (liquidation_hour - 0.5):
+        return 2
+    elif time_float >= (liquidation_hour - 2.0):
+        return 1
+        
+    return 0
+
+
+def is_market_closing_soon(utc_time: Optional[datetime] = None, close_hour_utc: int = 21) -> bool:
+    """
+    Check if it's Friday approaching market close — time to exit all positions
+    to avoid Weekend Gap risk.
+
+    Forex market closes Friday ~22:00 UTC. This function triggers early
+    (default: Friday 21:00 UTC) to allow orderly position closure while
+    liquidity is still reasonable.
+
+    Args:
+        utc_time: UTC datetime. Uses current UTC time if None.
+        close_hour_utc: Hour (UTC) on Friday after which positions should be closed.
+                        Default 21 = 1 hour before market close.
+
+    Returns:
+        True if it's Friday at or after close_hour_utc (but before full weekend).
+    """
+    if utc_time is None:
+        utc_time = datetime.now(timezone.utc)
+
+    weekday = utc_time.weekday()  # 4 = Friday
+    hour = utc_time.hour
+
+    # Friday at or after the configured close hour, but before 22:00 (full weekend)
+    if weekday == 4 and close_hour_utc <= hour < 22:
+        return True
+
+    return False
+
+
 def is_trading_hours(utc_time: Optional[datetime] = None) -> bool:
     """
     Check if current time is within any trading session.

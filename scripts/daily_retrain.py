@@ -40,8 +40,8 @@ except ImportError:
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 TRAINING_DATA_PATH = PROJECT_ROOT / "logs" / "training_data.csv"
-MODEL_PATH         = PROJECT_ROOT / "src" / "ml" / "gatekeeper_v1.model"
-BACKUP_MODEL_PATH  = PROJECT_ROOT / "src" / "ml" / "gatekeeper_v1.model.bak"
+MODEL_PATH         = PROJECT_ROOT / "src" / "ml" / "gatekeeper_v1.json"
+BACKUP_MODEL_PATH  = PROJECT_ROOT / "src" / "ml" / "gatekeeper_v1.json.bak"
 RETRAIN_LOG_PATH   = PROJECT_ROOT / "logs" / "retrain_log.csv"
 
 FEATURE_COLS = ["RSI_M15", "RSI_H1", "RSI_H4", "ADX", "ATR", "hour"]

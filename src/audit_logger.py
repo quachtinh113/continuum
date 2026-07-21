@@ -53,7 +53,8 @@ def _init_logger():
 def _get_audit_file() -> Path:
     """Get today's audit log file path."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return settings.LOG_PATH / f"audit_{today}.jsonl"
+    prefix = f"bot_{settings.MAGIC_NUMBER}_" if getattr(settings, "MAGIC_NUMBER", 202500) != 202500 else ""
+    return settings.LOG_PATH / f"{prefix}audit_{today}.jsonl"
 
 
 def log_decision(

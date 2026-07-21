@@ -12,8 +12,25 @@ if not exist "v9_continuum" (
     cd /d "d:\05_Quant\v9 Continuum"
 )
 
+:: Kích hoạt môi trường ảo nếu tồn tại
+if exist .\venv\Scripts\activate.bat (
+    call .\venv\Scripts\activate.bat
+) else if exist .\.venv\Scripts\activate.bat (
+    call .\.venv\Scripts\activate.bat
+) else (
+    echo [WARNING] Khong tim thay thu muc .\venv hoac .\.venv. Se dung Python he thong.
+)
+
 :: Set utf-8 encoding for proper emoji display
 set PYTHONIOENCODING=utf-8
+
+:: Stop old bot instance if running to ensure a clean start with the latest process
+if exist logs\bot.pid set /p OLD_PID=<logs\bot.pid
+if defined OLD_PID (
+    echo [INFO] Stopping existing bot process PID: %OLD_PID%...
+    taskkill /F /PID %OLD_PID% >nul 2>&1
+    set OLD_PID=
+)
 
 :: Auto-restart loop (max 50 restarts to prevent infinite crash loops)
 set /a RESTART_COUNT=0

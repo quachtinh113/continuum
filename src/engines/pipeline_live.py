@@ -12,7 +12,7 @@ def run_shadow_audit():
     print("Starting ML Shadow Audit in OBSERVE_ONLY mode...")
     
     # Initialize Gatekeeper
-    gatekeeper = MLGatekeeper("src/ml/gatekeeper_v1.model")
+    gatekeeper = MLGatekeeper("src/ml/gatekeeper_v1.json")
     if not gatekeeper.is_ready:
         print("ML Gatekeeper is not ready. Aborting.")
         return

@@ -6,6 +6,19 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+import scipy.stats as stats
+
+# Refined risk-control configuration – V9 Continuum (Trailing BE - Tuned)
+V9_REFINED_CONFIG = {
+    "SOFT_ATR_MULTIPLIER": 2.6,              # Wider stop to absorb H1 candle noise
+    "BE_ACTIVATION_ATR_MULTIPLIER": 2.5,    # Activate trailing protection earlier (was 2.8)
+    "BE_PROFIT_OFFSET_ATR": 0.5,            # Floor: minimum locked profit (entry + offset)
+    "TRAILING_STOP_ATR": 1.2,               # Tighter trail gap to lock more alpha (was 1.5)
+    "DCA_MULTIPLIERS": [1.5, 2.5],          # Layers 1-2 passive, Layer 3 regime-driven
+    "CONDITIONAL_L3_REGIME_ONLY": True,     # Layer 3 requires liquidity sweep signal
+    "L3_MIN_ATR_DISTANCE": 3.0              # Minimum ATR distance from entry for Layer 3
+}
+
 
 # Setup path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +32,7 @@ from v9_continuum.layers.regime import (
 )
 from v9_continuum.layers.position import PositionSizer
 from v9_continuum.layers.signal import SMCEngine, MLSignalEngine, Signal
-from src.session_manager import get_current_session, is_weekend, Session
+from src.session_manager import get_current_session, is_weekend, is_market_closing_soon, Session
 from config.symbols import get_symbol_spec, get_all_symbols
 
 def get_backtest_spread_pips(symbol: str, current_hour: int) -> float:
@@ -31,6 +44,51 @@ def get_backtest_spread_pips(symbol: str, current_hour: int) -> float:
     elif spec.category in ["GOLD", "COMMODITY"]:
         return 80.0 if is_rollover else 20.0
     return 4.0 if is_rollover else 1.5
+
+
+def calculate_dynamic_slippage(atr_value: float, category: str) -> float:
+    """
+    Calculates dynamic slippage based on current ATR.
+    Returns value in pips to be added/subtracted directly.
+    """
+    alpha_mapping = {
+        'GOLD': 0.15,      # Gold has high volatility sweeps
+        'CRYPTO': 0.05,    # BTC is thick but slips on breaks
+        'INDEX': 0.10,     # Indices slip at US open
+        'FX': 0.02         # FX is highly liquid and stable
+    }
+    alpha = alpha_mapping.get(category, 0.10)
+    base_slippage = 0.5  # Fixed minimum latency slippage
+    
+    return base_slippage + (alpha * atr_value)
+
+
+def calculate_probabilistic_sharpe_ratio(returns_series: List[float], benchmark_sr: float = 0.0) -> float:
+    """
+    Calculates Probabilistic Sharpe Ratio (PSR) for a series of trade returns.
+    """
+    n = len(returns_series)
+    if n < 5:
+        return 0.0
+    
+    mean_ret = np.mean(returns_series)
+    std_ret = np.std(returns_series, ddof=1)
+    
+    if std_ret == 0:
+        return 0.0
+        
+    sr = mean_ret / std_ret
+    
+    skew = stats.skew(returns_series)
+    kurt = stats.kurtosis(returns_series, fisher=False) # Pearson Kurtosis
+    
+    v_sr = (1 - skew * sr + ((kurt - 1) / 4) * (sr ** 2)) / (n - 1)
+    if v_sr <= 0:
+        return 0.0
+        
+    t_stat = (sr - benchmark_sr) / np.sqrt(v_sr)
+    return float(stats.norm.cdf(t_stat))
+
 
 
 def calculate_actual_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
@@ -96,7 +154,8 @@ class V9VirtualPortfolio:
 
 class V9ContinuumBacktester:
     """Historical backtest simulator mirroring the exact V9 Continuum rules."""
-    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65):
+    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None):
+        # base_target_usd at $180 – realistic TP zone within normal cycle distribution
         self.data_dir = Path(data_dir)
         self.base_target_usd = base_target_usd
         self.risk_percent = risk_percent
@@ -104,6 +163,7 @@ class V9ContinuumBacktester:
         self.ml_veto_threshold = ml_veto_threshold
         self.ml_extend_threshold = ml_extend_threshold
         self.ml_cut_threshold = ml_cut_threshold
+        self.weekend_pre_close_hour = weekend_pre_close_hour  # None = disabled
         self.governor = PortfolioGovernor()
         self.position_sizer = PositionSizer()
         self.smc_engine = SMCEngine()
@@ -234,7 +294,16 @@ class V9ContinuumBacktester:
                     active_keys = list(portfolio.active_cycles.keys())
                     for sym in active_keys:
                         close_price = current_prices.get(sym, portfolio.active_cycles[sym]["entry_price"])
-                        self.close_position(sym, portfolio, close_price, current_time, "DAILY_DRAWDOWN_CUT")
+                        self.close_position(sym, portfolio, close_price, current_time, "DAILY_DRAWDOWN_CUT", indicators_map[sym].get("ATR", 0.0))
+
+            # ── Weekend Pre-Close: Exit all positions before Friday market close ──
+            if self.weekend_pre_close_hour is not None and portfolio.active_cycles:
+                if is_market_closing_soon(current_time, close_hour_utc=self.weekend_pre_close_hour):
+                    active_keys = list(portfolio.active_cycles.keys())
+                    for sym in active_keys:
+                        close_price = current_prices.get(sym, portfolio.active_cycles[sym]["entry_price"])
+                        self.close_position(sym, portfolio, close_price, current_time, "WEEKEND_PRE_CLOSE", indicators_map[sym].get("ATR", 0.0))
+                    continue  # Skip signal evaluation and DCA for this bar
 
             # ── 1. Manage Active Positions (TP, SL, 12H, 24H Exits & DCA) ──
             active_symbols = list(portfolio.active_cycles.keys())
@@ -259,13 +328,13 @@ class V9ContinuumBacktester:
                 spread_pips = get_backtest_spread_pips(sym, current_time.hour)
                 spread_usd, commission = self.get_costs(sym, total_lots, spread_pips, current_price)
                 
-                # Net take profit check
+                # Net take profit check (TP target raised 1.8× to separate from trailing stop zone)
                 net_tp_target = self.position_sizer.calculate_target_exit_price(
                     cycle["direction"],
                     avg_entry_price,
                     total_lots,
                     sym,
-                    target_gross_usd=(15.0 if get_symbol_spec(sym).category == "INDEX" else self.base_target_usd) * (total_lots / cycle["base_lot"]),
+                    target_gross_usd=(27.0 if get_symbol_spec(sym).category == "INDEX" else self.base_target_usd) * (total_lots / cycle["base_lot"]),
                     spread_cost_realtime=spread_usd,
                     commission=commission
                 )
@@ -276,10 +345,20 @@ class V9ContinuumBacktester:
                     is_tp_hit = True
 
                 if is_tp_hit and cycle["holding_hours"] > 1.0:
-                    self.close_position(sym, portfolio, net_tp_target, current_time, "TAKE_PROFIT")
+                    self.close_position(sym, portfolio, net_tp_target, current_time, "TAKE_PROFIT", row.get("ATR", 0.0))
                     continue
 
-                # ── Break-Even Check (Relaxed BE logic) ──
+                # ── Soft ATR Stop (2.2× ATR – tight cycle loss cap) ──
+                soft_stop_distance = V9_REFINED_CONFIG["SOFT_ATR_MULTIPLIER"] * row["ATR"]
+                is_sl_hit = False
+                if cycle["direction"] == "BUY" and current_price <= (avg_entry_price - soft_stop_distance):
+                    is_sl_hit = True
+                elif cycle["direction"] == "SELL" and current_price >= (avg_entry_price + soft_stop_distance):
+                    is_sl_hit = True
+
+                if is_sl_hit:
+                    self.close_position(sym, portfolio, current_price, current_time, "SOFT_ATR_STOP", row.get("ATR", 0.0))
+                    continue
                 minor_liq_swept = False
                 if len(history_records[sym]) >= 20:
                     df_history = pd.DataFrame(history_records[sym])
@@ -287,30 +366,55 @@ class V9ContinuumBacktester:
                     if not swing_highs.empty and not swing_lows.empty:
                         last_swing_high = float(swing_highs.iloc[-1])
                         last_swing_low = float(swing_lows.iloc[-1])
-                        if cycle["direction"] == "BUY" and current_price >= last_swing_high:
+                        if cycle["direction"] == "BUY" and last_swing_high > avg_entry_price and current_price >= last_swing_high:
                             minor_liq_swept = True
-                        elif cycle["direction"] == "SELL" and current_price <= last_swing_low:
+                        elif cycle["direction"] == "SELL" and last_swing_low < avg_entry_price and current_price <= last_swing_low:
                             minor_liq_swept = True
 
-                activation_distance = 1.5 * row["ATR"]
-                buffer_distance = 0.0 # Exit at entry price exactly
-
-                is_be_triggered = False
+                # ── Trailing Break-Even (replaces static BE) ──
+                # Track the extreme price reached by this cycle (best price in trade direction)
                 if cycle["direction"] == "BUY":
-                    if not cycle.get("be_activated", False) and (current_price >= avg_entry_price + activation_distance or minor_liq_swept):
-                        cycle["be_activated"] = True
-                    
-                    if cycle.get("be_activated", False) and current_price <= avg_entry_price + buffer_distance:
-                        is_be_triggered = True
-                else: # SELL
-                    if not cycle.get("be_activated", False) and (current_price <= avg_entry_price - activation_distance or minor_liq_swept):
-                        cycle["be_activated"] = True
-                    
-                    if cycle.get("be_activated", False) and current_price >= avg_entry_price - buffer_distance:
-                        is_be_triggered = True
+                    cycle["extreme_price"] = max(cycle.get("extreme_price", current_price), row["high"])
+                else:
+                    cycle["extreme_price"] = min(cycle.get("extreme_price", current_price), row["low"])
 
-                if is_be_triggered:
-                    self.close_position(sym, portfolio, avg_entry_price, current_time, "BREAK_EVEN")
+                activation_distance = V9_REFINED_CONFIG["BE_ACTIVATION_ATR_MULTIPLIER"] * row["ATR"]
+                floor_offset = V9_REFINED_CONFIG["BE_PROFIT_OFFSET_ATR"] * row["ATR"]
+                trail_gap = V9_REFINED_CONFIG["TRAILING_STOP_ATR"] * row["ATR"]
+
+                is_trailing_exit = False
+                if cycle["direction"] == "BUY":
+                    # Activate once price escapes noise zone
+                    if not cycle.get("trailing_active", False) and (
+                        current_price >= avg_entry_price + activation_distance or minor_liq_swept
+                    ):
+                        cycle["trailing_active"] = True
+
+                    if cycle.get("trailing_active", False):
+                        # Trailing stop: highest_price - trail_gap, floored at entry + floor_offset
+                        computed_stop = cycle["extreme_price"] - trail_gap
+                        floor_stop = avg_entry_price + floor_offset
+                        final_trailing_stop = max(computed_stop, floor_stop)
+                        if current_price <= final_trailing_stop:
+                            is_trailing_exit = True
+                            cycle["be_exit_price"] = final_trailing_stop
+                else:  # SELL
+                    if not cycle.get("trailing_active", False) and (
+                        current_price <= avg_entry_price - activation_distance or minor_liq_swept
+                    ):
+                        cycle["trailing_active"] = True
+
+                    if cycle.get("trailing_active", False):
+                        computed_stop = cycle["extreme_price"] + trail_gap
+                        floor_stop = avg_entry_price - floor_offset
+                        final_trailing_stop = min(computed_stop, floor_stop)
+                        if current_price >= final_trailing_stop:
+                            is_trailing_exit = True
+                            cycle["be_exit_price"] = final_trailing_stop
+
+                if is_trailing_exit:
+                    be_fill = cycle.get("be_exit_price", avg_entry_price)
+                    self.close_position(sym, portfolio, be_fill, current_time, "TRAILING_BE_EXIT", row.get("ATR", 0.0))
                     continue
 
                 # 12-Hour cognitive ML cutoff rule
@@ -349,15 +453,15 @@ class V9ContinuumBacktester:
                                     layer_loss = layer_loss / current_price
                                 portfolio.balance += layer_loss
                             else:
-                                self.close_position(sym, portfolio, current_price, current_time, "12H_ML_CUT")
+                                self.close_position(sym, portfolio, current_price, current_time, "12H_ML_CUT", row.get("ATR", 0.0))
                         else:
                             # High risk or timeout: CUT ALL
-                            self.close_position(sym, portfolio, current_price, current_time, "12H_ML_CUT")
+                            self.close_position(sym, portfolio, current_price, current_time, "12H_ML_CUT", row.get("ATR", 0.0))
                             continue
 
                 # 24H Hard time stop
                 if cycle["holding_hours"] >= 24.0:
-                    self.close_position(sym, portfolio, current_price, current_time, "24H_HARD_CUT")
+                    self.close_position(sym, portfolio, current_price, current_time, "24H_HARD_CUT", row.get("ATR", 0.0))
                     continue
 
                 # DCA spacings check (Dynamic Progressive Step)
@@ -368,8 +472,9 @@ class V9ContinuumBacktester:
                 elif sym in ["US500", "US100", "BTCUSD"]:
                     dca_multiplier = 1.5 * self.dca_multiplier_scale
 
-                # Progressive steps: Layer 1 = 1.5 * ATR, Layer 2 = 4.0 * ATR, Layer 3 = 8.0 * ATR from entry
-                step_multipliers = [1.5, 4.0, 8.0]
+                # Layers 1-2: passive distance-based DCA
+                # Layer 3: regime-driven only (3.0× ATR + liquidity sweep signal)
+                step_multipliers = V9_REFINED_CONFIG["DCA_MULTIPLIERS"]
                 current_layer_idx = len(cycle["dca_layers"])
                 if current_layer_idx < len(step_multipliers):
                     spacing_price = row["ATR"] * step_multipliers[current_layer_idx] * dca_multiplier
@@ -379,20 +484,33 @@ class V9ContinuumBacktester:
                 # Check if price moved against us by spacing distance from entry price
                 entry_price = cycle["entry_price"]
                 should_dca = False
-                
+
                 if cycle["direction"] == "BUY" and current_price <= (entry_price - spacing_price):
                     should_dca = True
                 elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
                     should_dca = True
 
-                if should_dca and len(cycle["dca_layers"]) < 3 and not day_drawdown_locked:
-                    # Place DCA order
-                    dca_lot = cycle["base_lot"] # 1:1 lot multiplier
+                if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
+                    # Layers 1-2: execute passively
+                    dca_lot = cycle["base_lot"]
                     cycle["dca_layers"].append({
                         "price": current_price,
                         "lot": dca_lot,
                         "time": current_time
                     })
+                elif len(cycle["dca_layers"]) == 2 and not day_drawdown_locked and V9_REFINED_CONFIG["CONDITIONAL_L3_REGIME_ONLY"]:
+                    # Layer 3: regime-driven — requires 3.0× ATR distance AND liquidity sweep signal
+                    l3_min_dist = V9_REFINED_CONFIG["L3_MIN_ATR_DISTANCE"] * row["ATR"] * dca_multiplier
+                    price_dist_from_entry = abs(current_price - entry_price)
+                    # Regime gate: liquidity sweep already detected (minor_liq_swept) at this extended distance
+                    l3_regime_ok = (price_dist_from_entry >= l3_min_dist) and minor_liq_swept
+                    if l3_regime_ok:
+                        dca_lot = cycle["base_lot"]
+                        cycle["dca_layers"].append({
+                            "price": current_price,
+                            "lot": dca_lot,
+                            "time": current_time
+                        })
 
             # ── 2. Evaluate entries (only at the first bar of each hour) ──
             if not day_drawdown_locked and current_time.minute == 0 and not is_weekend(current_time):
@@ -539,7 +657,7 @@ class V9ContinuumBacktester:
         commission = 7.0 * lot # raw spread Exness commission
         return spread_usd, commission
 
-    def close_position(self, symbol: str, portfolio: V9VirtualPortfolio, exit_price: float, time: datetime, reason: str):
+    def close_position(self, symbol: str, portfolio: V9VirtualPortfolio, exit_price: float, time: datetime, reason: str, atr_value: float = 0.0):
         cycle = portfolio.active_cycles.pop(symbol, None)
         if not cycle:
             return
@@ -562,7 +680,9 @@ class V9ContinuumBacktester:
 
         # Realize commissions and slippage/spread costs
         spread_pips = get_backtest_spread_pips(symbol, time.hour)
-        spread_usd, commission = self.get_costs(symbol, total_lots, spread_pips, exit_price)
+        dynamic_slippage = calculate_dynamic_slippage(atr_value, spec.category)
+        total_pips = spread_pips + dynamic_slippage
+        spread_usd, commission = self.get_costs(symbol, total_lots, total_pips, exit_price)
         
         final_pnl = total_pnl - spread_usd - commission
         portfolio.balance += final_pnl
@@ -593,7 +713,8 @@ class V9ContinuumBacktester:
                 "avg_holding_hours": 0.0,
                 "avg_dca_layers": 0.0,
                 "max_dca_reached": 0,
-                "reasons": {}
+                "reasons": {},
+                "psr": 0.0
             }
 
         wins = [c for c in closed if c["final_pnl"] > 0]
@@ -618,6 +739,10 @@ class V9ContinuumBacktester:
         total_profit = portfolio.balance - portfolio.initial_balance
         profit_pct = (total_profit / portfolio.initial_balance) * 100.0
         
+        # Calculate PSR
+        returns_series = [c["final_pnl"] for c in closed]
+        psr = calculate_probabilistic_sharpe_ratio(returns_series, benchmark_sr=0.0)
+        
         return {
             "initial_balance": portfolio.initial_balance,
             "final_balance": portfolio.balance,
@@ -633,7 +758,8 @@ class V9ContinuumBacktester:
             "avg_holding_hours": round(float(avg_holding), 1),
             "avg_dca_layers": round(float(avg_dca), 2),
             "max_dca_reached": max_dca,
-            "reasons": reasons
+            "reasons": reasons,
+            "psr": psr
         }
 
 
@@ -663,6 +789,7 @@ def run_1y_backtest():
     print(f" Net Profit       : ${metrics['total_profit_usd']:+,.2f} ({metrics['profit_percent']:+,.2f}%)")
     print(f" Win Rate         : {metrics['win_rate']:.2f}%")
     print(f" Profit Factor    : {metrics['profit_factor']}")
+    print(f" Prob. Sharpe (PSR): {metrics['psr']:.4f} ({metrics['psr']*100:.2f}%)")
     print(f" Max Drawdown     : ${metrics['max_drawdown_usd']:,.2f} ({metrics['max_drawdown_percent']:.2f}%)")
     print(f" Avg Cycle Length : {metrics['avg_holding_hours']} hours")
     print(f" Avg DCA Layers   : {metrics['avg_dca_layers']}")
@@ -708,6 +835,7 @@ Generated: {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")} UTC
 | **Gross Profit** | ${metrics['gross_profit']:,.2f} |
 | **Gross Loss** | ${metrics['gross_loss']:,.2f} |
 | **Profit Factor** | {metrics['profit_factor']} |
+| **Prob. Sharpe (PSR)** | {metrics['psr']:.4f} ({metrics['psr']*100:.2f}%) |
 | **Max Drawdown (Equity)** | ${metrics['max_drawdown_usd']:,.2f} ({metrics['max_drawdown_percent']:.2f}%) |
 | **Avg Cycle Length** | {metrics['avg_holding_hours']} hours |
 | **Avg DCA Layers** | {metrics['avg_dca_layers']} |

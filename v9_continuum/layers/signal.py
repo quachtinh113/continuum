@@ -182,7 +182,7 @@ class MLSignalEngine:
     """
     Evaluates risk and enhances SMC signals using ML models.
     """
-    def __init__(self, model_path: str = "src/ml/gatekeeper_v1.model"):
+    def __init__(self, model_path: str = "src/ml/gatekeeper_v1.json"):
         self.model_path = model_path
         self.model = None
         self.is_ready = False
@@ -192,11 +192,17 @@ class MLSignalEngine:
     def _load_model(self):
         if xgb is not None:
             try:
+                # Prefer .json format to avoid XGBoost format warnings
+                target_path = self.model_path
+                json_alt = target_path.replace(".model", ".json")
+                if target_path.endswith(".model") and os.path.exists(json_alt):
+                    target_path = json_alt
+
                 self.model = xgb.Booster()
-                self.model.load_model(self.model_path)
+                self.model.load_model(target_path)
                 self.is_ready = True
-                if os.path.exists(self.model_path):
-                    self.last_mtime = os.path.getmtime(self.model_path)
+                if os.path.exists(target_path):
+                    self.last_mtime = os.path.getmtime(target_path)
             except Exception:
                 self.is_ready = False
 
