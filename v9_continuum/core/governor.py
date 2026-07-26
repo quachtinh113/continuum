@@ -1,5 +1,6 @@
 import time
 import math
+import pandas as pd
 from typing import Dict, Any, List, Optional, Tuple
 from v9_continuum.config import matrix_config
 
@@ -157,3 +158,61 @@ class PortfolioGovernor:
         
         winner_token["governor_score"] = winner_score
         return winner_token
+
+    def check_cross_asset_dca_exposure(
+        self,
+        symbol: str,
+        current_layer_idx: int,
+        active_cycles: List[Dict[str, Any]]
+    ) -> Tuple[bool, str]:
+        """
+        Cross-Asset Exposure Cap:
+        Prevents US500 and XAUUSD from accumulating Layer 2+ simultaneously.
+        Rule: If XAUUSD has 2+ DCA layers (current_layer_idx >= 2), Veto DCA Layer 2+ for US500 (and vice versa).
+        """
+        clean_symbol = symbol.replace("m", "")  # Handle symbols like XAUUSDm, US500m
+        if clean_symbol not in ["US500", "XAUUSD"]:
+            return True, "Approved"
+
+        # If we are about to add Layer 2 or Layer 3, current_layer_idx will be >= 1 (since 0-indexed)
+        if current_layer_idx >= 1:
+            target_symbol = "XAUUSD" if clean_symbol == "US500" else "US500"
+            for cycle in active_cycles:
+                cycle_sym = cycle.get("symbol", "").replace("m", "")
+                if cycle_sym == target_symbol:
+                    if len(cycle.get("dca_layers", [])) >= 2:
+                        return False, f"Vetoed: {target_symbol} already has {len(cycle['dca_layers'])} DCA layers. Cannot add Layer {current_layer_idx + 1} to {symbol}."
+        return True, "Approved"
+
+    def is_volatility_expanding(self, symbol: str, rates_m15: pd.DataFrame) -> Tuple[bool, str]:
+        """
+        Volatility Expansion (ATR Spike Filter) check on M15.
+        Formula: ATR(M15) > 1.8 * SMA(ATR, 20).
+        If true, returns True and the explanation string.
+        """
+        if rates_m15 is None or len(rates_m15) < 35:  # Need 14 bars for ATR + 20 bars for SMA of ATR
+            return False, "Not enough M15 data to calculate ATR Spike"
+
+        try:
+            high = rates_m15["high"]
+            low = rates_m15["low"]
+            close = rates_m15["close"]
+            prev_close = close.shift(1)
+
+            tr1 = high - low
+            tr2 = (high - prev_close).abs()
+            tr3 = (low - prev_close).abs()
+
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr_m15 = tr.rolling(14).mean()
+            sma_atr_m15 = atr_m15.rolling(20).mean()
+
+            current_atr = float(atr_m15.iloc[-1])
+            sma_atr = float(sma_atr_m15.iloc[-1])
+
+            if current_atr > 1.8 * sma_atr:
+                return True, f"Volatility spike detected on M15: current ATR ({current_atr:.5f}) > 1.8 * SMA_20 ({sma_atr:.5f})"
+        except Exception as e:
+            return False, f"Error calculating volatility expansion: {str(e)}"
+
+        return False, "Volatility is normal"

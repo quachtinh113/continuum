@@ -217,6 +217,75 @@ class TestV9ContinuumFramework(unittest.TestCase):
         
         self.assertGreater(fit_theta, 0.0)
         self.assertAlmostEqual(fit_mu, 100.0, delta=2.0)
+    def test_cross_asset_dca_exposure(self):
+        """
+        Tests Cross-Asset DCA Cap.
+        XAUUSDm with 2 DCA layers should veto US500m Layer 2+ DCA orders.
+        """
+        # Scenario 1: XAUUSD has 2 layers. Attempting to add Layer 2 (current_layer_idx = 1) on US500m should be vetoed.
+        active_cycles = [
+            {
+                "symbol": "XAUUSDm",
+                "dca_layers": [{"ticket": 101}, {"ticket": 102}]  # 2 layers
+            }
+        ]
+        approved, msg = self.governor.check_cross_asset_dca_exposure("US500m", 1, active_cycles)
+        self.assertFalse(approved)
+        self.assertIn("Vetoed", msg)
+
+        # Scenario 2: XAUUSD has 2 layers. Attempting to add Layer 1 (current_layer_idx = 0) on US500m should be approved.
+        approved, msg = self.governor.check_cross_asset_dca_exposure("US500m", 0, active_cycles)
+        self.assertTrue(approved)
+        self.assertEqual(msg, "Approved")
+
+        # Scenario 3: XAUUSD has only 1 layer. Attempting to add Layer 2 on US500m should be approved.
+        active_cycles_1_layer = [
+            {
+                "symbol": "XAUUSDm",
+                "dca_layers": [{"ticket": 101}]  # 1 layer
+            }
+        ]
+        approved, msg = self.governor.check_cross_asset_dca_exposure("US500m", 1, active_cycles_1_layer)
+        self.assertTrue(approved)
+        self.assertEqual(msg, "Approved")
+
+    def test_volatility_expansion_filter(self):
+        """
+        Tests Volatility Expansion (ATR Spike) filter on M15.
+        ATR(M15) > 1.8 * SMA(ATR, 20) should trigger a veto.
+        """
+        # Create a pandas DataFrame simulating M15 rates (at least 35 bars)
+        bars = 40
+        times = pd.date_range("2026-07-25 00:00:00", periods=bars, freq="15min")
+        
+        # Scenario 1: Flat/Normal volatility
+        df_normal = pd.DataFrame({
+            "time": times,
+            "high": [1.1010] * bars,
+            "low": [1.1000] * bars,
+            "close": [1.1005] * bars
+        })
+        is_spike, msg = self.governor.is_volatility_expanding("EURUSD", df_normal)
+        self.assertFalse(is_spike)
+        self.assertEqual(msg, "Volatility is normal")
+
+        # Scenario 2: Volatility spike at the last bar (current ATR > 1.8 * SMA)
+        # Setup steady high-low of 0.0010 (TR = 0.0010) for first 39 bars.
+        # Make the last bar have a high-low of 0.0300.
+        highs = [1.1010] * 39 + [1.1300]
+        lows = [1.1000] * 39 + [1.1000]
+        closes = [1.1005] * 39 + [1.1005]
+        
+        df_spike = pd.DataFrame({
+            "time": times,
+            "high": highs,
+            "low": lows,
+            "close": closes
+        })
+        
+        is_spike, msg = self.governor.is_volatility_expanding("EURUSD", df_spike)
+        self.assertTrue(is_spike)
+        self.assertIn("Volatility spike detected", msg)
 
 
 if __name__ == "__main__":

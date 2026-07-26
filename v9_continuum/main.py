@@ -206,7 +206,31 @@ class V9ContinuumBot:
                 # Normalize ATR by price to keep all assets on the same scale
                 normalized_atr = atr_val / rates_m15["close"].iloc[-1]
                 
+                # Kaufman Efficiency Ratio
+                m15_close = rates_m15["close"]
+                change = abs(m15_close.iloc[-1] - m15_close.iloc[-11]) if len(m15_close) >= 11 else 0.0
+                volatility = m15_close.diff().abs().iloc[-10:].sum() if len(m15_close) >= 11 else 1.0
+                er_ratio = float(change / volatility) if volatility > 0 else 0.5
+                
+                # Volatility Expansion Ratio (ATR Ratio)
+                tr_m15 = (rates_m15["high"] - rates_m15["low"]).abs()
+                atr_fast_val = float(tr_m15.iloc[-14:].mean()) if len(tr_m15) >= 14 else atr_val
+                atr_slow_val = float(tr_m15.mean()) if not tr_m15.empty else atr_val
+                atr_ratio = float(atr_fast_val / atr_slow_val) if atr_slow_val > 0 else 1.0
+                
+                # Momentum Deltas
+                rsi_h1_series = calculate_rsi(rates_h1["close"]) if rates_h1 is not None and not rates_h1.empty else pd.Series([50.0]*4)
+                rsi_m15_series = calculate_rsi(rates_m15["close"]) if rates_m15 is not None and not rates_m15.empty else pd.Series([50.0]*4)
+                rsi_h1_delta = float(rsi_h1_series.iloc[-1] - rsi_h1_series.iloc[-4]) if len(rsi_h1_series) >= 4 else 0.0
+                rsi_m15_delta = float(rsi_m15_series.iloc[-1] - rsi_m15_series.iloc[-4]) if len(rsi_m15_series) >= 4 else 0.0
+
                 feat = {
+                    "er_ratio": er_ratio,
+                    "atr_ratio": atr_ratio,
+                    "rsi_h1_delta": rsi_h1_delta,
+                    "rsi_m15_delta": rsi_m15_delta,
+                    "adx": adx_val,
+                    "rsi_m15": rsi_m15,
                     "RSI_M15": rsi_m15,
                     "RSI_H1": rsi_h1,
                     "RSI_H4": rsi_h4,
@@ -651,6 +675,23 @@ class V9ContinuumBot:
                     should_dca = True
 
             if should_dca and len(cycle["dca_layers"]) < 3:  # Hard limit 3 layers
+                # 1. Cross-Asset Exposure Cap Check
+                approved, dca_reason = self.governor.check_cross_asset_dca_exposure(
+                    symbol,
+                    len(cycle["dca_layers"]),
+                    list(self.active_cycles.values())
+                )
+                if not approved:
+                    log_info(f"🚫 Governor DCA Veto for {symbol}: {dca_reason}")
+                    continue
+
+                # 2. Volatility Expansion Filter (ATR Spike Filter) Check
+                rates_m15_dca = self.connector.get_rates(symbol, "M15", 100)
+                is_spike, spike_reason = self.governor.is_volatility_expanding(symbol, rates_m15_dca)
+                if is_spike:
+                    log_info(f"🚫 Governor Volatility DCA Veto for {symbol}: {spike_reason}")
+                    continue
+
                 # Check weekend liquidation phase 2
                 from src.session_manager import get_weekend_liquidation_phase
                 dca_phase = get_weekend_liquidation_phase(now, settings.LIQUIDATION_HOUR_UTC) if settings.ENABLE_WEEKEND_LIQUIDATION else 0

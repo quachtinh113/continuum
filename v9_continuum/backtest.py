@@ -491,13 +491,26 @@ class V9ContinuumBacktester:
                     should_dca = True
 
                 if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
-                    # Layers 1-2: execute passively
-                    dca_lot = cycle["base_lot"]
-                    cycle["dca_layers"].append({
-                        "price": current_price,
-                        "lot": dca_lot,
-                        "time": current_time
-                    })
+                    # Governor Risk Checks
+                    gov_approved, _ = self.governor.check_cross_asset_dca_exposure(
+                        sym,
+                        len(cycle["dca_layers"]),
+                        list(portfolio.active_cycles.values())
+                    )
+                    if gov_approved:
+                        hist_df = pd.DataFrame(history_records[sym])
+                        is_spike, _ = self.governor.is_volatility_expanding(sym, hist_df)
+                        if is_spike:
+                            gov_approved = False
+                            
+                    if gov_approved:
+                        # Layers 1-2: execute passively
+                        dca_lot = cycle["base_lot"]
+                        cycle["dca_layers"].append({
+                            "price": current_price,
+                            "lot": dca_lot,
+                            "time": current_time
+                        })
                 elif len(cycle["dca_layers"]) == 2 and not day_drawdown_locked and V9_REFINED_CONFIG["CONDITIONAL_L3_REGIME_ONLY"]:
                     # Layer 3: regime-driven — requires 3.0× ATR distance AND liquidity sweep signal
                     l3_min_dist = V9_REFINED_CONFIG["L3_MIN_ATR_DISTANCE"] * row["ATR"] * dca_multiplier
@@ -505,12 +518,25 @@ class V9ContinuumBacktester:
                     # Regime gate: liquidity sweep already detected (minor_liq_swept) at this extended distance
                     l3_regime_ok = (price_dist_from_entry >= l3_min_dist) and minor_liq_swept
                     if l3_regime_ok:
-                        dca_lot = cycle["base_lot"]
-                        cycle["dca_layers"].append({
-                            "price": current_price,
-                            "lot": dca_lot,
-                            "time": current_time
-                        })
+                        # Governor Risk Checks
+                        gov_approved, _ = self.governor.check_cross_asset_dca_exposure(
+                            sym,
+                            len(cycle["dca_layers"]),
+                            list(portfolio.active_cycles.values())
+                        )
+                        if gov_approved:
+                            hist_df = pd.DataFrame(history_records[sym])
+                            is_spike, _ = self.governor.is_volatility_expanding(sym, hist_df)
+                            if is_spike:
+                                gov_approved = False
+                                
+                        if gov_approved:
+                            dca_lot = cycle["base_lot"]
+                            cycle["dca_layers"].append({
+                                "price": current_price,
+                                "lot": dca_lot,
+                                "time": current_time
+                            })
 
             # ── 2. Evaluate entries (only at the first bar of each hour) ──
             if not day_drawdown_locked and current_time.minute == 0 and not is_weekend(current_time):
@@ -577,9 +603,43 @@ class V9ContinuumBacktester:
                         if sig_val != Signal.HOLD:
                             # XGBoost confirming filter
                             session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
+                            # Contextual features calculation
+                            hist_records_sym = history_records[sym]
+                            if len(hist_records_sym) >= 11:
+                                closes_hist = np.array([h["close"] for h in hist_records_sym[-11:]])
+                                change = abs(closes_hist[-1] - closes_hist[0])
+                                vol = np.sum(np.abs(np.diff(closes_hist)))
+                                er_ratio = float(change / vol) if vol > 0 else 0.5
+                            else:
+                                er_ratio = 0.5
+
+                            if len(hist_records_sym) >= 14:
+                                tr_hist = [max(h["high"] - h["low"], abs(h["high"] - hist_records_sym[i-1]["close"]), abs(h["low"] - hist_records_sym[i-1]["close"])) for i, h in enumerate(hist_records_sym[-14:], start=len(hist_records_sym)-14)]
+                                atr_fast_bkt = float(np.mean(tr_hist))
+                                atr_slow_bkt = float(np.mean([max(h["high"] - h["low"], 1e-5) for h in hist_records_sym]))
+                                atr_ratio = float(atr_fast_bkt / atr_slow_bkt) if atr_slow_bkt > 0 else 1.0
+                            else:
+                                atr_ratio = 1.0
+
+                            rsi_h1_val = row.get("RSI_H1", 50.0)
+                            rsi_m15_val = row.get("RSI_M15", 50.0)
+                            
+                            if len(hist_records_sym) >= 4:
+                                rsi_h1_delta = float(rsi_h1_val - hist_records_sym[-4].get("RSI_H1", rsi_h1_val))
+                                rsi_m15_delta = float(rsi_m15_val - hist_records_sym[-4].get("RSI_M15", rsi_m15_val))
+                            else:
+                                rsi_h1_delta = 0.0
+                                rsi_m15_delta = 0.0
+
                             feat = {
-                                "RSI_M15": row.get("RSI_M15", 50.0),
-                                "RSI_H1": row.get("RSI_H1", 50.0),
+                                "er_ratio": er_ratio,
+                                "atr_ratio": atr_ratio,
+                                "rsi_h1_delta": rsi_h1_delta,
+                                "rsi_m15_delta": rsi_m15_delta,
+                                "adx": adx_val,
+                                "rsi_m15": rsi_m15_val,
+                                "RSI_M15": rsi_m15_val,
+                                "RSI_H1": rsi_h1_val,
                                 "RSI_H4": row.get("RSI_H4", 50.0),
                                 "ADX": adx_val,
                                 "ATR": atr_val,
@@ -587,7 +647,7 @@ class V9ContinuumBacktester:
                                 "Volatility_Index": atr_val / row["close"],
                                 "hour": current_time.hour,
                                 "Session_Code": session_map.get(session.value if hasattr(session, "value") else str(session), -1),
-                                "RSI_H1_Div": abs(row.get("RSI_H1", 50.0) - 50.0),
+                                "RSI_H1_Div": abs(rsi_h1_val - 50.0),
                                 "Trend_Vol_Ratio": adx_val * atr_val
                             }
                             loss_prob = self.ml_engine.predict_loss_probability(feat)

@@ -227,8 +227,12 @@ class MLSignalEngine:
         """
         if self.is_ready and self.model is not None and xgb is not None:
             try:
-                cols = ['RSI_Delta', 'Volatility_Index', 'Session_Code', 'RSI_H1_Div', 'Trend_Vol_Ratio', 'RSI_M15', 'RSI_H1', 'RSI_H4', 'ADX', 'ATR', 'hour']
-                row = [features.get(col, 0.0) for col in cols]
+                # Dynamic feature extraction matching the booster's feature_names
+                cols = getattr(self.model, "feature_names", None)
+                if not cols:
+                    cols = ['er_ratio', 'atr_ratio', 'rsi_h1_delta', 'rsi_m15_delta', 'adx', 'rsi_m15']
+                
+                row = [float(features.get(col, 0.0)) for col in cols]
                 dtest = xgb.DMatrix([row], feature_names=cols)
                 prob = self.model.predict(dtest)[0]
                 return float(prob)
