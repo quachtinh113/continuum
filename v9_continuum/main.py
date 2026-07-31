@@ -245,8 +245,9 @@ class V9ContinuumBot:
                 }
                 
                 loss_prob = self.ml_engine.predict_loss_probability(feat)
-                if loss_prob > 0.6:
-                    log_info(f"🛡️ ML filter vetoed {sig_val.value} entry for {symbol} due to high loss risk ({loss_prob:.2f})")
+                veto_threshold = getattr(settings, "ML_VETO_THRESHOLD", 0.80)
+                if loss_prob > veto_threshold:
+                    log_info(f"🛡️ ML filter vetoed {sig_val.value} entry for {symbol} due to high loss risk ({loss_prob:.2f} > {veto_threshold:.2f})")
                     log_decision(symbol, session.value if hasattr(session, "value") else str(session), feat, sig_val.value, RiskDecision(False, f"ML filter vetoed due to loss risk {loss_prob:.2f}"), "VETOED")
                     continue
 
