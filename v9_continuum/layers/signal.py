@@ -15,6 +15,47 @@ class Signal(Enum):
     HOLD = "HOLD"
 
 
+class MarketRegime(Enum):
+    TRENDING_HIGH_VOL = "TRENDING_HIGH_VOL"
+    TRENDING_LOW_VOL = "TRENDING_LOW_VOL"
+    RANGING_HIGH_VOL = "RANGING_HIGH_VOL"
+    RANGING_MEAN_REVERTING = "RANGING_MEAN_REVERTING"
+
+
+class MarketRegimeClassifier:
+    """
+    Classifies Market Regimes using Dynamic ADX Quantiles & Volatility Ratio (ATR Ratio).
+    Blocks Trend-Following signals when market is in RANGING_MEAN_REVERTING state.
+    """
+    def __init__(self, adx_trending_threshold: float = 25.0, atr_volatility_threshold: float = 1.10):
+        self.adx_trending_threshold = adx_trending_threshold
+        self.atr_volatility_threshold = atr_volatility_threshold
+
+    def classify_regime(self, adx: float, atr_ratio: float) -> MarketRegime:
+        is_trending = adx > self.adx_trending_threshold
+        is_high_vol = atr_ratio > self.atr_volatility_threshold
+
+        if is_trending and is_high_vol:
+            return MarketRegime.TRENDING_HIGH_VOL
+        elif is_trending and not is_high_vol:
+            return MarketRegime.TRENDING_LOW_VOL
+        elif not is_trending and is_high_vol:
+            return MarketRegime.RANGING_HIGH_VOL
+        else:
+            return MarketRegime.RANGING_MEAN_REVERTING
+
+    def is_signal_allowed(self, signal_type: str, regime: MarketRegime) -> Tuple[bool, str]:
+        """
+        Validates signal type against current market regime.
+        - Trend-Following / SMC BOS signals are BLOCKED in RANGING_MEAN_REVERTING.
+        - Mean-Reversion / Pullback signals are ALLOWED in RANGING_MEAN_REVERTING.
+        """
+        if signal_type in ["SMC_BOS", "TREND_FOLLOWING", "MOMENTUM_BREAKOUT"]:
+            if regime == MarketRegime.RANGING_MEAN_REVERTING:
+                return False, f"Trend signal BLOCKED in {regime.value} regime"
+        return True, f"Signal approved for {regime.value} regime"
+
+
 # ── SMC (Smart Money Concepts) Engine ─────────────────────────────
 
 class SMCEngine:
@@ -230,7 +271,7 @@ class MLSignalEngine:
                 # Dynamic feature extraction matching the booster's feature_names
                 cols = getattr(self.model, "feature_names", None)
                 if not cols:
-                    cols = ['er_ratio', 'atr_ratio', 'rsi_h1_delta', 'rsi_m15_delta', 'adx', 'rsi_m15']
+                    cols = ['er_ratio', 'atr_ratio', 'rsi_h1_delta', 'rsi_h4_delta', 'adx_scaled', 'rsi_m15_scaled']
                 
                 row = [float(features.get(col, 0.0)) for col in cols]
                 dtest = xgb.DMatrix([row], feature_names=cols)

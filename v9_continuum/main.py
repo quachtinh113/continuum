@@ -191,36 +191,43 @@ class V9ContinuumBot:
             sig_val, reason, adx_val, spread = self.evaluate_symbol_signal(symbol, session, rates_m15, rates_h1)
             
             if sig_val != Signal.HOLD:
-                # Sizing indicators check
-                atr_series = rates_h1["close"].diff().abs().rolling(14).mean() # simple ATR proxy
-                atr_val = float(atr_series.iloc[-1]) if not atr_series.empty else 0.001
+                # ENFORCE STRICT CLOSED-BAR RULE: Drop forming bar 0 to guarantee 0% Look-Ahead Bias
+                closed_m15 = rates_m15.iloc[:-1] if (rates_m15 is not None and len(rates_m15) > 1) else rates_m15
+                closed_h1 = rates_h1.iloc[:-1] if (rates_h1 is not None and len(rates_h1) > 1) else rates_h1
                 
-                # Fetch indicators for ML
+                # Fetch H4 rates and slice to closed bars
                 rates_h4 = self.connector.get_rates(symbol, "H4", 100)
-                rsi_m15 = float(calculate_rsi(rates_m15["close"]).iloc[-1]) if rates_m15 is not None and not rates_m15.empty else 50.0
-                rsi_h1 = float(calculate_rsi(rates_h1["close"]).iloc[-1]) if rates_h1 is not None and not rates_h1.empty else 50.0
-                rsi_h4 = float(calculate_rsi(rates_h4["close"]).iloc[-1]) if rates_h4 is not None and not rates_h4.empty else 50.0
+                closed_h4 = rates_h4.iloc[:-1] if (rates_h4 is not None and len(rates_h4) > 1) else rates_h4
+
+                # Sizing indicators check on closed H1
+                atr_series = closed_h1["close"].diff().abs().rolling(14).mean() # simple ATR proxy
+                atr_val = float(atr_series.iloc[-1]) if not atr_series.empty else 0.001
+
+                # Calculate MTF RSIs on closed candles
+                rsi_m15 = float(calculate_rsi(closed_m15["close"]).iloc[-1]) if closed_m15 is not None and not closed_m15.empty else 50.0
+                rsi_h1 = float(calculate_rsi(closed_h1["close"]).iloc[-1]) if closed_h1 is not None and not closed_h1.empty else 50.0
+                rsi_h4 = float(calculate_rsi(closed_h4["close"]).iloc[-1]) if closed_h4 is not None and not closed_h4.empty else 50.0
                 
                 # Check ML Confirmation Filter
                 session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
                 # Normalize ATR by price to keep all assets on the same scale
-                normalized_atr = atr_val / rates_m15["close"].iloc[-1]
+                normalized_atr = atr_val / closed_m15["close"].iloc[-1]
                 
-                # Kaufman Efficiency Ratio
-                m15_close = rates_m15["close"]
+                # Kaufman Efficiency Ratio on closed M15
+                m15_close = closed_m15["close"]
                 change = abs(m15_close.iloc[-1] - m15_close.iloc[-11]) if len(m15_close) >= 11 else 0.0
                 volatility = m15_close.diff().abs().iloc[-10:].sum() if len(m15_close) >= 11 else 1.0
                 er_ratio = float(change / volatility) if volatility > 0 else 0.5
                 
-                # Volatility Expansion Ratio (ATR Ratio)
-                tr_m15 = (rates_m15["high"] - rates_m15["low"]).abs()
+                # Volatility Expansion Ratio (ATR Ratio) on closed M15
+                tr_m15 = (closed_m15["high"] - closed_m15["low"]).abs()
                 atr_fast_val = float(tr_m15.iloc[-14:].mean()) if len(tr_m15) >= 14 else atr_val
                 atr_slow_val = float(tr_m15.mean()) if not tr_m15.empty else atr_val
                 atr_ratio = float(atr_fast_val / atr_slow_val) if atr_slow_val > 0 else 1.0
                 
-                # Momentum Deltas
-                rsi_h1_series = calculate_rsi(rates_h1["close"]) if rates_h1 is not None and not rates_h1.empty else pd.Series([50.0]*4)
-                rsi_m15_series = calculate_rsi(rates_m15["close"]) if rates_m15 is not None and not rates_m15.empty else pd.Series([50.0]*4)
+                # Momentum Deltas on closed series
+                rsi_h1_series = calculate_rsi(closed_h1["close"]) if closed_h1 is not None and not closed_h1.empty else pd.Series([50.0]*4)
+                rsi_m15_series = calculate_rsi(closed_m15["close"]) if closed_m15 is not None and not closed_m15.empty else pd.Series([50.0]*4)
                 rsi_h1_delta = float(rsi_h1_series.iloc[-1] - rsi_h1_series.iloc[-4]) if len(rsi_h1_series) >= 4 else 0.0
                 rsi_m15_delta = float(rsi_m15_series.iloc[-1] - rsi_m15_series.iloc[-4]) if len(rsi_m15_series) >= 4 else 0.0
 
@@ -229,6 +236,9 @@ class V9ContinuumBot:
                     "atr_ratio": atr_ratio,
                     "rsi_h1_delta": rsi_h1_delta,
                     "rsi_m15_delta": rsi_m15_delta,
+                    "rsi_h4_delta": (rsi_h4 - rsi_h1) / 15.0,
+                    "adx_scaled": (adx_val - 25.0) / 15.0,
+                    "rsi_m15_scaled": (rsi_m15 - 50.0) / 15.0,
                     "adx": adx_val,
                     "rsi_m15": rsi_m15,
                     "RSI_M15": rsi_m15,

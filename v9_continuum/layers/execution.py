@@ -17,6 +17,9 @@ class ExecutionEngine:
     def __init__(self, connector: MT5Connector):
         self.connector = connector
         self._dry_run = not self.connector._dry_run if hasattr(self.connector, "_dry_run") else False
+        self.execution_history: List[Dict[str, Any]] = []
+        self.circuit_breaker_tripped: bool = False
+        self.max_allowed_slippage_pips: float = 0.30
 
     def normalize_lot(self, symbol: str, lot: float) -> float:
         """
@@ -85,10 +88,21 @@ class ExecutionEngine:
         comment: str = "V9 Continuum",
     ) -> Optional[int]:
         """
-        Normalizes lot size and routes order to MT5 via connector.
+        Normalizes lot size, records request_price, latency_ms, fill_price,
+        and triggers Circuit Breaker if rolling Slippage Drag > 0.3 pips.
         """
+        if self.circuit_breaker_tripped:
+            print(f"[CIRCUIT BREAKER KILLED] Execution blocked for {symbol}. Slippage exceeds safety threshold ({self.max_allowed_slippage_pips} pips).")
+            return None
+
+        t_start = time.perf_counter()
         normalized_lot = self.normalize_lot(symbol, lot)
-        return self.connector.place_order(
+        
+        # Get pre-execution tick request_price
+        current_tick = self.connector.get_tick(symbol)
+        request_price = price or (current_tick["ask"] if order_type == "BUY" else current_tick["bid"]) if current_tick else None
+
+        ticket = self.connector.place_order(
             symbol=symbol,
             order_type=order_type,
             lot=normalized_lot,
@@ -97,6 +111,38 @@ class ExecutionEngine:
             tp=tp,
             comment=comment
         )
+
+        t_end = time.perf_counter()
+        latency_ms = (t_end - t_start) * 1000.0
+
+        # Post-execution fill_price check
+        post_tick = self.connector.get_tick(symbol)
+        fill_price = (post_tick["ask"] if order_type == "BUY" else post_tick["bid"]) if post_tick else request_price
+
+        spec = get_symbol_spec(symbol)
+        slippage_pips = (abs(fill_price - request_price) / spec.pip_size) if (request_price and fill_price) else 0.0
+
+        record = {
+            "symbol": symbol,
+            "order_type": order_type,
+            "lot": normalized_lot,
+            "request_price": request_price,
+            "fill_price": fill_price,
+            "latency_ms": latency_ms,
+            "slippage_pips": slippage_pips,
+            "timestamp": time.time()
+        }
+        self.execution_history.append(record)
+
+        # Audit rolling slippage (last 10 trades)
+        recent_slips = [r["slippage_pips"] for r in self.execution_history[-10:]]
+        avg_slip = sum(recent_slips) / len(recent_slips) if recent_slips else 0.0
+        
+        if avg_slip > self.max_allowed_slippage_pips and len(self.execution_history) >= 5:
+            self.circuit_breaker_tripped = True
+            print(f"[EMERGENCY KILL-SWITCH] Slippage Drag ({avg_slip:.3f} pips) > Limit ({self.max_allowed_slippage_pips} pips)! Circuit Breaker ACTIVATED.")
+
+        return ticket
 
     def close_position(self, ticket: int, symbol: str) -> bool:
         """
