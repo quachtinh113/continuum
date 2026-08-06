@@ -56,14 +56,20 @@ class PositionSizer:
 
         spec = get_symbol_spec(symbol)
         sl_distance = atr * atr_multiplier
-        risk_usd = equity * (risk_percent / 100.0) * self.risk_multiplier
+        # Fixed 0.02 lot size for Phase 1 Live Deployment (Equity < 1000.0)
+        if equity < 1000.0:
+            return 0.02
+
+        # Enforce strict 1.0% risk per trade cap for equity >= 1000.0
+        effective_risk_pct = min(risk_percent, 1.0)
+        risk_usd = equity * (effective_risk_pct / 100.0) * self.risk_multiplier
 
         # 1. Equal Risk Parity Lot Calculation (Dollar ATR Risk)
         raw_lot = risk_usd / (sl_distance * spec.contract_size)
 
-        # 2. Apply Dynamic ML Score Scaling
+        # 2. Apply Dynamic ML Score Scaling (LOCKED if equity < 1000.0)
         from config import settings
-        if ml_score is not None and spec.category in ["FX", "INDEX"]:
+        if equity >= 1000.0 and ml_score is not None and spec.category in ["FX", "INDEX"]:
             if ml_score < getattr(settings, "ML_LOT_BOOST_THRESHOLD", 0.25):
                 raw_lot = raw_lot * getattr(settings, "ML_LOT_BOOST_MULTIPLIER", 1.5)
             elif ml_score > getattr(settings, "ML_LOT_REDUCE_THRESHOLD", 0.45):

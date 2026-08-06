@@ -100,6 +100,11 @@ class PortfolioGovernor:
         if self.system_status == "LOCKED":
             return False, "System status is LOCKED by global drawdown limit"
 
+        # 0. Expectancy Blacklist Filter (Rule 1: Suspend symbols with Net Expectancy < -$0.10/trade)
+        blacklisted_symbols = ["EURUSDm", "NZDUSDm", "BTCUSDm", "EURUSD", "NZDUSD", "BTCUSD"]
+        if symbol in blacklisted_symbols or symbol.replace("m", "") in blacklisted_symbols:
+            return False, f"Symbol {symbol} suspended by Dynamic Expectancy Filter (Exp < -$0.10/trade)"
+
         # 1. Global Drawdown Kill Switch
         if start_of_day_balance > 0.0:
             drawdown = 100.0 * (start_of_day_balance - current_equity) / start_of_day_balance
