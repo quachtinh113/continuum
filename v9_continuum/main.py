@@ -65,12 +65,8 @@ class V9ContinuumBot:
         # Kalman filter instances for Asia Session: symbol -> tracker
         self.kalman_trackers: Dict[str, KalmanFilterTracker] = {}
         
-        # Symbol list
-        from config.symbols import get_all_symbols
-        self.symbols = get_all_symbols()
-        # Fallback to a core set if empty
-        if not self.symbols:
-            self.symbols = ["XAUUSD", "EURUSD", "GBPUSD", "US30", "US100"]
+        # Locked portfolio universe for re-calibrated Stage 1
+        self.symbols = ["XAUUSD", "US100"]
 
     def get_hard_sl_multiplier(self, category: str) -> float:
         """Get Hard SL multiplier based on symbol's category."""
@@ -255,9 +251,9 @@ class V9ContinuumBot:
                 }
                 
                 loss_prob = self.ml_engine.predict_loss_probability(feat)
-                veto_threshold = getattr(settings, "ML_VETO_THRESHOLD", 0.80)
-                if loss_prob > veto_threshold:
-                    log_info(f"🛡️ ML filter vetoed {sig_val.value} entry for {symbol} due to high loss risk ({loss_prob:.2f} > {veto_threshold:.2f})")
+                veto_limit = getattr(settings, "ML_VETO_THRESHOLD", 0.80)
+                if loss_prob > veto_limit:
+                    log_info(f"🛡️ [ML VETO] Active for {symbol}. Risk: {loss_prob:.4f} > Threshold: {veto_limit:.2f}")
                     log_decision(symbol, session.value if hasattr(session, "value") else str(session), feat, sig_val.value, RiskDecision(False, f"ML filter vetoed due to loss risk {loss_prob:.2f}"), "VETOED")
                     continue
 

@@ -129,6 +129,10 @@ ML_LOT_REDUCE_THRESHOLD: float = _float("ML_LOT_REDUCE_THRESHOLD", 0.45) # Score
 ML_LOT_BOOST_MULTIPLIER: float = _float("ML_LOT_BOOST_MULTIPLIER", 1.5)  # ×1.5 when high confidence
 ML_LOT_REDUCE_MULTIPLIER: float = _float("ML_LOT_REDUCE_MULTIPLIER", 0.7) # ×0.7 when caution
 
+# ── Production Environment Config ──────────────────────────
+EXNESS_SYMBOL_SUFFIX: str = _get("EXNESS_SYMBOL_SUFFIX", "")
+EXECUTION_MODE: str = _get("EXECUTION_MODE", "live")
+
 # ── Weekend Risk Mitigation ────────────────────────────────
 ENABLE_WEEKEND_LIQUIDATION: bool = _bool("ENABLE_WEEKEND_LIQUIDATION", False)
 LIQUIDATION_HOUR_UTC: int = _int("LIQUIDATION_HOUR_UTC", 20)
