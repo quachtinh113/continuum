@@ -1111,7 +1111,8 @@ class V9ContinuumBot:
                 time.sleep(10 + random.uniform(0.1, 0.9))
 
         # Shutdown
-        self.close_all_positions()
+        if getattr(settings, "EMERGENCY_EVENT_MODE", False):
+            self.close_all_positions()
         self.connector.disconnect()
         log_info("👋 Bot stopped gracefully.")
 
