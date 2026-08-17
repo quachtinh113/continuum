@@ -24,18 +24,10 @@ if exist .\venv\Scripts\activate.bat (
 :: Set utf-8 encoding for proper emoji display
 set PYTHONIOENCODING=utf-8
 
-:: Stop old bot instance if running to ensure a clean start with the latest process
-if exist logs\bot.pid set /p OLD_PID=<logs\bot.pid
-if defined OLD_PID (
-    echo [INFO] Stopping existing bot process PID: %OLD_PID%...
-    taskkill /F /PID %OLD_PID% >nul 2>&1
-    set OLD_PID=
-)
-
 :: Auto-restart loop (max 50 restarts to prevent infinite crash loops)
 set /a RESTART_COUNT=0
 set MAX_RESTARTS=50
-set RESTART_DELAY=30
+set RESTART_DELAY=15
 
 :start_loop
 set /a RESTART_COUNT+=1
@@ -48,6 +40,13 @@ if %RESTART_COUNT% GTR %MAX_RESTARTS% (
     echo =======================================================
     pause > nul
     exit /b 1
+)
+
+:: Clean up stale bot PID before starting
+if exist logs\bot.pid set /p OLD_PID=<logs\bot.pid
+if defined OLD_PID (
+    taskkill /F /PID %OLD_PID% >nul 2>&1
+    set OLD_PID=
 )
 
 echo.
