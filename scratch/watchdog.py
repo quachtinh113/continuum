@@ -49,6 +49,19 @@ def get_heartbeat_file():
         prefix = ""
     return logs_dir / f"{prefix}heartbeat.txt"
 
+MUTEX_NAME = "Global\\V9_CONTINUUM_SINGLE_INSTANCE_MUTEX"
+
+def is_bot_mutex_held():
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        # OpenMutex with SYNCHRONIZE (0x00100000)
+        mutex = kernel32.OpenMutexW(0x00100000, False, MUTEX_NAME)
+        if mutex:
+            kernel32.CloseHandle(mutex)
+            return True
+    return False
+
 def get_bot_pid():
     pid_file = logs_dir / "bot.pid"
     if pid_file.exists():
@@ -80,6 +93,9 @@ def kill_bot(pid):
 
 def start_bot():
     global bot_process
+    if is_bot_mutex_held():
+        log("🛡️ [MUTEX GUARD] Bot process is already running and holding Named Mutex lock. Skipping spawn.")
+        return
     log("🔄 Starting V9 Continuum Bot process...")
     try:
         bot_process = subprocess.Popen(

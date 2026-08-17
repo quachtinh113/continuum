@@ -683,12 +683,17 @@ class V9ContinuumBacktester:
                         )
                         
                         if approved:
-                            # Sizer - reduced risk_percent from 0.5% to 0.15% to buffer the 3% drawdown limit
                             lot_size = self.position_sizer.calculate_lot_size(
-                                portfolio.equity, winner["atr"], sym, risk_percent=self.risk_percent, ml_score=winner.get("loss_prob")
+                                portfolio.equity,
+                                winner["atr"],
+                                sym,
+                                risk_percent=self.risk_percent,
+                                ml_score=winner.get("loss_prob"),
+                                current_price=winner["price"],
+                                open_symbols=list(portfolio.active_cycles.keys())
                             )
-                            # Normalization step simulated
-                            lot_size = max(0.01, round(lot_size, 2))
+                            # Normalization step simulated (enforce min lot 0.01)
+                            lot_size = max(0.01, round(lot_size, 2)) if lot_size > 0 else 0.01
                             
                             portfolio.active_cycles[sym] = {
                                 "symbol": sym,

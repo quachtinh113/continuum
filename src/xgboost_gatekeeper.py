@@ -124,11 +124,9 @@ class MLGatekeeper:
             return None
             
         try:
-            # Build feature vector directly — avoids creating a DataFrame per call
-            row = [features.get(col) for col in self._FEATURE_COLS]
-            if any(v is None for v in row):
-                return None
-            dtest = xgb.DMatrix([row], feature_names=self._FEATURE_COLS)
+            model_cols = self.model.feature_names if hasattr(self.model, 'feature_names') and self.model.feature_names else self._FEATURE_COLS
+            row = [features.get(col, 0.0) for col in model_cols]
+            dtest = xgb.DMatrix([row], feature_names=model_cols)
             prob = self.model.predict(dtest)[0]
             # Since model is trained on 1-is_win (LOSS_THREAT = 1), prob is probability of LOSS_THREAT
             return float(prob)

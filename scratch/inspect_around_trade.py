@@ -1,22 +1,20 @@
-import sys
 import json
 from pathlib import Path
+from datetime import datetime
 
-sys.stdout.reconfigure(encoding='utf-8')
-
-def inspect_lines(log_path, start_line, end_line):
-    print(f"\n==========================================")
-    print(f"LINES {start_line} TO {end_line} IN: {log_path.name}")
-    print(f"==========================================")
-    
+def main():
+    log_path = Path("logs/audit_2026-08-06.jsonl")
     with open(log_path, "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
-            if line_num < start_line:
-                continue
-            if line_num > end_line:
-                break
-            print(f"Line {line_num}: {line.strip()}")
+        for line in f:
+            try:
+                data = json.loads(line.strip())
+                ts_str = data.get("timestamp")
+                ts = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")
+                # Filter for Aug 6 between 04:19:00 and 04:21:00 UTC
+                if datetime(2026, 8, 6, 4, 19, 0) <= ts <= datetime(2026, 8, 6, 4, 21, 0):
+                    print(f"[{ts_str}] Event: {data.get('event') or data.get('severity')} | Symbol: {data.get('symbol')} | Msg: {data.get('message') or data.get('reason')}")
+            except Exception:
+                pass
 
-if __name__ == "__main__":
-    project_root = Path("d:/05_Quant/v9 Continuum")
-    inspect_lines(project_root / "logs" / "audit_2026-06-23.jsonl", 2350, 2380)
+if __name__ == '__main__':
+    main()

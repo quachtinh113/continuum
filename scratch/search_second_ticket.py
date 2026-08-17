@@ -1,16 +1,20 @@
-import os
-import sys
+import json
+from pathlib import Path
+from datetime import datetime
 
-if sys.version_info >= (3, 7):
-    sys.stdout.reconfigure(encoding='utf-8')
+def main():
+    log_path = Path("logs/audit_2026-08-06.jsonl")
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                data = json.loads(line.strip())
+                if data.get("symbol") == "US100":
+                    ts_str = data.get("timestamp")
+                    ts = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")
+                    if ts >= datetime(2026, 8, 6, 10, 13, 0):
+                        print(line.strip())
+            except Exception:
+                pass
 
-log_bot = r"C:\Users\Pro Trader\.gemini\antigravity-ide\brain\ec48749c-4956-419a-b50e-b869ac13ad38\.system_generated\tasks\task-306.log"
-log_audit = r"d:\05_Quant\NOWTRAEDING\logs\audit_2026-06-15.jsonl"
-
-for name, path in [("bot log", log_bot), ("audit log", log_audit)]:
-    if os.path.exists(path):
-        print(f"--- Searching in {name} ---")
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                if "42160" in line or "USTEC" in line or "42180" in line:
-                    print(line.strip())
+if __name__ == '__main__':
+    main()

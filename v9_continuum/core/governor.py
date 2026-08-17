@@ -13,12 +13,38 @@ class PortfolioGovernor:
     """
     def __init__(self):
         self.system_status = "OPERATIONAL"  # OPERATIONAL, LOCKED
+        self.lock_reason: Optional[str] = None
+        self.locked_at: Optional[float] = None
+        self.audit_log: List[Dict[str, Any]] = []
         
         # Volatility decay tracking: symbol -> {"spike_atr": float, "spike_time": float, "base_atr": float}
         self._vol_spikes: Dict[str, Dict[str, float]] = {}
         
         # Macro news lock tracking: list of floats (timestamps of macro events)
         self._news_events: List[float] = []
+
+    def manual_unlock(self, admin_user: str, reason: str) -> Tuple[bool, str]:
+        """
+        Institutional Governance Rule:
+        Locks CANNOT be automatically cleared by market recovery or day transitions.
+        Unlocking requires explicit manual human intervention with an audit reason.
+        """
+        if not admin_user or not reason:
+            return False, "Manual unlock rejected: admin_user and reason are required"
+        
+        record = {
+            "timestamp": time.time(),
+            "admin_user": admin_user,
+            "action": "MANUAL_UNLOCK",
+            "previous_status": self.system_status,
+            "lock_reason": self.lock_reason,
+            "reason": reason
+        }
+        self.audit_log.append(record)
+        self.system_status = "OPERATIONAL"
+        self.lock_reason = None
+        self.locked_at = None
+        return True, f"System unlocked by {admin_user}: {reason}"
 
     def is_usd_symbol(self, symbol: str) -> bool:
         """Determines if a symbol is related to the US Dollar."""
@@ -98,19 +124,16 @@ class PortfolioGovernor:
         Validates global portfolio bounds and triggers emergency Kill Switches.
         """
         if self.system_status == "LOCKED":
-            return False, "System status is LOCKED by global drawdown limit"
-
-        # 0. Expectancy Blacklist Filter (Rule 1: Suspend symbols with Net Expectancy < -$0.10/trade)
-        blacklisted_symbols = ["EURUSDm", "NZDUSDm", "BTCUSDm", "EURUSD", "NZDUSD", "BTCUSD"]
-        if symbol in blacklisted_symbols or symbol.replace("m", "") in blacklisted_symbols:
-            return False, f"Symbol {symbol} suspended by Dynamic Expectancy Filter (Exp < -$0.10/trade)"
+            return False, f"System status is LOCKED: {self.lock_reason or 'Global drawdown limit breached'}"
 
         # 1. Global Drawdown Kill Switch
         if start_of_day_balance > 0.0:
             drawdown = 100.0 * (start_of_day_balance - current_equity) / start_of_day_balance
             if drawdown >= matrix_config.max_daily_drawdown_percent:
                 self.system_status = "LOCKED"
-                return False, f"KILL SWITCH TRIGGERED: Drawdown of {drawdown:.2f}% >= {matrix_config.max_daily_drawdown_percent}%"
+                self.lock_reason = f"KILL SWITCH TRIGGERED: Drawdown of {drawdown:.2f}% >= {matrix_config.max_daily_drawdown_percent}%"
+                self.locked_at = current_time
+                return False, self.lock_reason
 
         # 2. Maximum parallel position count
         unique_active_symbols = len(set(pos["symbol"] for pos in active_positions))

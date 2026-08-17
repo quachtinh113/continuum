@@ -43,11 +43,42 @@ def _shutdown_handler(signum, frame):
     _running = False
 
 
+# ── Single Instance Named Mutex Enforcer ───────────────────────────
+MUTEX_NAME = "Global\\V9_CONTINUUM_SINGLE_INSTANCE_MUTEX"
+_mutex_handle = None
+
+def acquire_single_instance_lock():
+    global _mutex_handle
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        ERROR_ALREADY_EXISTS = 183
+        _mutex_handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        last_error = kernel32.GetLastError()
+        if last_error == ERROR_ALREADY_EXISTS:
+            log_error(f"🚨 [GOVERNANCE FATAL] Another V9 Continuum instance is already running! (Mutex: {MUTEX_NAME})")
+            log_error("🚨 Immediate process termination triggered to enforce 1-Instance Policy.")
+            sys.exit(1)
+        log_info(f"🔒 Single Instance Lock Acquired (Windows Named Mutex: {MUTEX_NAME})")
+    else:
+        import fcntl
+        lock_file = "/tmp/v9_continuum.lock"
+        try:
+            fp = open(lock_file, "w")
+            fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _mutex_handle = fp
+            log_info("🔒 Single Instance Lock Acquired (Linux File Lock)")
+        except IOError:
+            log_error("🚨 [GOVERNANCE FATAL] Another V9 Continuum instance is already running via File Lock!")
+            sys.exit(1)
+
+
 class V9ContinuumBot:
     """
     Main V9 Continuum Trading Loop Orchestrator.
     """
     def __init__(self):
+        acquire_single_instance_lock()
         self.connector = MT5Connector()
         self.execution = ExecutionEngine(self.connector)
         self.position_sizer = PositionSizer()
@@ -86,9 +117,10 @@ class V9ContinuumBot:
         if self.last_balance_update_day != today:
             self.start_of_day_balance = current_balance
             self.last_balance_update_day = today
-            # Reset Governor to OPERATIONAL when day changes
-            self.governor.system_status = "OPERATIONAL"
-            log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}. Governor status reset to OPERATIONAL")
+            if self.governor.system_status == "LOCKED":
+                log_error(f"📅 Daily update: Balance is ${self.start_of_day_balance:.2f}. Governor remains LOCKED (Manual audit unlock required)")
+            else:
+                log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}. System OPERATIONAL")
 
     def evaluate_symbol_signal(
         self,
@@ -296,10 +328,19 @@ class V9ContinuumBot:
 
             log_decision(symbol, session_str, winner.get("features"), winner["direction"], RiskDecision(True, "Approved by Governor"), "ROUTE")
 
-            # Sizing and routing
+            # Sizing and routing (Fixed Fractional Risk)
             lot_size = self.position_sizer.calculate_lot_size(
-                equity, winner["atr"], symbol, risk_percent=0.15, ml_score=winner.get("loss_prob")
+                equity=equity,
+                atr=winner["atr"],
+                symbol=symbol,
+                risk_percent=0.5,
+                ml_score=winner.get("loss_prob"),
+                current_price=winner["price"],
+                open_symbols=list(self.active_cycles.keys())
             )
+            if lot_size <= 0:
+                log_info(f"🛡️ PositionSizer rejected entry for {symbol}: calculated lot {lot_size} <= 0")
+                return
             
             # Hard-SL based on Asset Class multiplier for catastrophic VPS crash backup
             from config.symbols import get_symbol_spec
@@ -404,9 +445,11 @@ class V9ContinuumBot:
                 unrealized_profit = pos["profit"] if pos else 0.0
 
             # Calculate average entry price and total lots across all DCA layers
-            total_lots = cycle["base_lot"] + sum(l.get("lot", cycle["base_lot"]) for l in cycle["dca_layers"])
-            total_cost = cycle["entry_price"] * cycle["base_lot"] + sum(l["entry_price"] * l.get("lot", cycle["base_lot"]) for l in cycle["dca_layers"])
-            avg_entry_price = total_cost / total_lots
+            base_lot = max(float(cycle.get("base_lot", 0.01) or 0.01), 0.01)
+            cycle["base_lot"] = base_lot
+            total_lots = base_lot + sum(float(l.get("lot", base_lot) or base_lot) for l in cycle["dca_layers"])
+            total_cost = cycle["entry_price"] * base_lot + sum(l["entry_price"] * float(l.get("lot", base_lot) or base_lot) for l in cycle["dca_layers"])
+            avg_entry_price = total_cost / total_lots if total_lots > 0 else cycle["entry_price"]
 
             # Calculate Spread Cost and Commission
             spread_cost, commission = self.execution.get_realtime_costs(symbol, total_lots, tick["spread_pips"])
@@ -416,7 +459,7 @@ class V9ContinuumBot:
             from config.symbols import get_symbol_spec
             spec = get_symbol_spec(symbol)
             base_target = 15.0 if spec.category == "INDEX" else 180.0
-            target_gross_usd = base_target * (total_lots / cycle["base_lot"])  # Optimized base gross target
+            target_gross_usd = base_target * (total_lots / base_lot)  # Optimized base gross target
             net_profit_target = self.position_sizer.calculate_target_exit_price(
                 cycle["direction"],
                 avg_entry_price,
