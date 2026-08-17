@@ -49,16 +49,35 @@ _mutex_handle = None
 
 def acquire_single_instance_lock():
     global _mutex_handle
+    if _mutex_handle is not None:
+        return
     if sys.platform == "win32":
         import ctypes
+        from pathlib import Path
         kernel32 = ctypes.windll.kernel32
         ERROR_ALREADY_EXISTS = 183
         _mutex_handle = kernel32.CreateMutexW(None, False, MUTEX_NAME)
         last_error = kernel32.GetLastError()
         if last_error == ERROR_ALREADY_EXISTS:
-            log_error(f"🚨 [GOVERNANCE FATAL] Another V9 Continuum instance is already running! (Mutex: {MUTEX_NAME})")
-            log_error("🚨 Immediate process termination triggered to enforce 1-Instance Policy.")
-            sys.exit(1)
+            # Check if logs/bot.pid has a different process that is actually alive
+            pid_file = Path("logs/bot.pid")
+            other_running = False
+            if pid_file.exists():
+                try:
+                    old_pid = int(pid_file.read_text().strip())
+                    if old_pid != os.getpid():
+                        import subprocess
+                        out = subprocess.check_output(f'tasklist /FI "PID eq {old_pid}" /NH', shell=True, text=True)
+                        if str(old_pid) in out:
+                            other_running = True
+                except Exception:
+                    pass
+            if other_running:
+                log_error(f"🚨 [GOVERNANCE FATAL] Another V9 Continuum instance is already running! (Mutex: {MUTEX_NAME})")
+                log_error("🚨 Immediate process termination triggered to enforce 1-Instance Policy.")
+                sys.exit(1)
+            else:
+                _mutex_handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
         log_info(f"🔒 Single Instance Lock Acquired (Windows Named Mutex: {MUTEX_NAME})")
     else:
         import fcntl
