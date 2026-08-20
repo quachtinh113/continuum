@@ -39,8 +39,9 @@ _running = True
 
 def _shutdown_handler(signum, frame):
     global _running
-    log_info("⛔ Shutdown signal received in V9 Continuum. Exiting loop...")
-    _running = False
+    # On Windows, background console commands can broadcast SIGINT to child group.
+    # We only log and keep running; termination is handled via taskkill on PID or exit file.
+    log_info(f"ℹ️ System signal {signum} received. Bot process remaining active.")
 
 
 # ── Single Instance Named Mutex Enforcer ───────────────────────────
