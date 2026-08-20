@@ -1140,7 +1140,10 @@ if __name__ == "__main__":
     try:
         bot = V9ContinuumBot()
         bot.run()
-    except BaseException as e:
+    except (KeyboardInterrupt, SystemExit) as e:
+        exit_code = e.code if isinstance(e, SystemExit) and isinstance(e.code, int) else 0
+        sys.exit(exit_code)
+    except Exception as e:
         import traceback
         err_msg = f"🔥 CRITICAL UNHANDLED BOT EXCEPTION: {e}\n{traceback.format_exc()}"
         print(err_msg, file=sys.stderr)
