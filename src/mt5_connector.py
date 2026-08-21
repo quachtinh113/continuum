@@ -118,9 +118,9 @@ class MT5Connector:
 
         mode = "🔴 LIVE TRADING" if not self._dry_run else "🟡 DRY RUN (Paper)"
         log_info(
-            f"MT5 Connected │ {mode} │ "
-            f"Account: {account.login} │ "
-            f"Balance: ${account.balance:.2f} │ "
+            f"MT5 Connected | {mode} | "
+            f"Account: {account.login} | "
+            f"Balance: ${account.balance:.2f} | "
             f"Server: {account.server}"
         )
 
@@ -408,7 +408,7 @@ class MT5Connector:
         # DRY RUN
         if self._dry_run:
             log_info(
-                f"🟡 DRY RUN ORDER │ {order_type} {lot} {symbol} @ {price} │ "
+                f"🟡 DRY RUN ORDER | {order_type} {lot} {symbol} @ {price} | "
                 f"SL={sl} TP={tp}"
             )
             return -1  # Fake ticket for dry run
@@ -443,7 +443,7 @@ class MT5Connector:
             return None
 
         log_info(
-            f"🟢 ORDER FILLED │ {order_type} {lot} {symbol} @ {result.price} │ "
+            f"🟢 ORDER FILLED | {order_type} {lot} {symbol} @ {result.price} | "
             f"Ticket: {result.order}"
         )
         return result.order
@@ -465,7 +465,7 @@ class MT5Connector:
             True if closed successfully.
         """
         if self._dry_run:
-            log_info(f"🟡 DRY RUN CLOSE │ Ticket: {ticket} │ {symbol}")
+            log_info(f"🟡 DRY RUN CLOSE | Ticket: {ticket} | {symbol}")
             return True
 
         mt5_symbol = get_mt5_name(symbol)
@@ -528,7 +528,7 @@ class MT5Connector:
             result = mt5.order_send(request)
 
             if result is not None and result.retcode == mt5.TRADE_RETCODE_DONE:
-                log_info(f"🔴 POSITION CLOSED │ Ticket: {ticket} │ {symbol} │ P&L: ${pos.profit:.2f}")
+                log_info(f"🔴 POSITION CLOSED | Ticket: {ticket} | {symbol} | P&L: ${pos.profit:.2f}")
                 return True
 
             # Handle failure

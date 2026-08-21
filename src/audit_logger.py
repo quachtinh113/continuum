@@ -40,11 +40,11 @@ def _init_logger():
     except Exception:
         pass
 
-    # Console handler — human-readable
+    # Console handler — human-readable with ASCII pipe to prevent CP1252 charmap crashes
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter(
-        "%(asctime)s │ %(levelname)-5s │ %(message)s",
+        "%(asctime)s | %(levelname)-5s | %(message)s",
         datefmt="%H:%M:%S"
     ))
     _logger.addHandler(console)
@@ -109,11 +109,11 @@ def log_decision(
     risk_emoji = "✅" if status_str == "APPROVED" else "🚫"
 
     _logger.info(
-        f"{emoji} {symbol:<8} │ {session:<10} │ "
-        f"RSI: H4={_fmt(rsi_h4)} H1={_fmt(rsi_h1)} M15={_fmt(rsi_m15)} │ "
-        f"ADX={_fmt(adx)} ATR={_fmt(atr, 5)} │ "
-        f"{signal:<4} │ {risk_emoji} {status_str} [{severity}] │ "
-        f"{execution_action} │ {reason}"
+        f"{emoji} {symbol:<8} | {session:<10} | "
+        f"RSI: H4={_fmt(rsi_h4)} H1={_fmt(rsi_h1)} M15={_fmt(rsi_m15)} | "
+        f"ADX={_fmt(adx)} ATR={_fmt(atr, 5)} | "
+        f"{signal:<4} | {risk_emoji} {status_str} [{severity}] | "
+        f"{execution_action} | {reason}"
     )
 
     return entry
@@ -143,7 +143,7 @@ def log_cycle_event(
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     _logger.info(
-        f"📋 {event:<15} │ {symbol:<8} │ {direction} │ "
+        f"📋 {event:<15} | {symbol:<8} | {direction} | "
         f"{json.dumps(details, default=str)}"
     )
 
@@ -153,7 +153,7 @@ def log_cycle_event(
 def log_error(message: str, **context):
     """Log an error with optional context."""
     _init_logger()
-    _logger.error(f"❌ {message} │ {context}" if context else f"❌ {message}")
+    _logger.error(f"❌ {message} | {context}" if context else f"❌ {message}")
 
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),

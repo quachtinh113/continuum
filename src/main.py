@@ -273,16 +273,16 @@ class NowTradingBot:
         self.risk_engine.update_start_of_day_balance(balance)
         if self.risk_engine.check_daily_drawdown_limit(equity):
             log_error(
-                f"🚨 Daily Drawdown limit reached! Start of Day Balance: ${self.risk_engine._start_of_day_balance:.2f}, "
+                f"Daily Drawdown limit reached! Start of Day Balance: ${self.risk_engine._start_of_day_balance:.2f}, "
                 f"Current Equity: ${equity:.2f}. Force closing all positions across all symbols."
             )
             self._force_close_all_symbols()
             return
 
         log_info(
-            f"━━━ Iteration │ {now.strftime('%Y-%m-%d %H:%M:%S')} UTC │ "
-            f"Session: {session.value} │ "
-            f"Active Cycles: {self.cycle_manager.get_active_cycle_count()} ━━━"
+            f"=== Iteration | {now.strftime('%Y-%m-%d %H:%M:%S')} UTC | "
+            f"Session: {session.value} | "
+            f"Active Cycles: {self.cycle_manager.get_active_cycle_count()} ==="
         )
 
         # ── Step 2: Process each symbol ──
@@ -308,7 +308,7 @@ class NowTradingBot:
 
             if self.connector.global_consecutive_failures >= threshold:
                 log_error(
-                    f"🔌 CIRCUIT BREAKER │ All {symbols_failed} symbols failed "
+                    f"CIRCUIT BREAKER | All {symbols_failed} symbols failed "
                     f"for {self.connector.global_consecutive_failures} consecutive iterations. "
                     f"Attempting MT5 reconnect..."
                 )
