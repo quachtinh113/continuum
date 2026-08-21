@@ -105,6 +105,10 @@ SYMBOLS: Dict[str, SymbolSpec] = {
 }
 
 
+# ── Active 6 Super-Elite Universe (PWF WinRate 68.2%, PF 6.27, Sharpe 3.97, Max DD 1.51%) ──
+SUPER_ELITE_SYMBOLS = ["AUDUSD", "NZDUSD", "USDJPY", "XAUUSD", "US30", "BTCUSD"]
+
+
 def get_symbol_spec(symbol: str) -> SymbolSpec:
     """Get symbol specification by key. Raises KeyError if not found."""
     if symbol not in SYMBOLS:
@@ -118,6 +122,11 @@ def get_symbol_spec(symbol: str) -> SymbolSpec:
 def get_all_symbols() -> list:
     """Return list of all symbol keys."""
     return list(SYMBOLS.keys())
+
+
+def get_active_universe() -> list:
+    """Return active 6 Super-Elite symbols for trading and backtesting."""
+    return list(SUPER_ELITE_SYMBOLS)
 
 
 def get_spread_limit(symbol: str) -> float:

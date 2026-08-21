@@ -52,6 +52,10 @@ public:
         // Fallback default
         return {"" + symbol + "m", "FX", 0.0001, 0.01, 10.0, 100000.0, "Unknown Symbol"};
     }
+
+    static std::vector<std::string> get_active_super_elite_universe() {
+        return {"AUDUSD", "NZDUSD", "USDJPY", "XAUUSD", "US30", "BTCUSD"};
+    }
 };
 
 } // namespace v9
