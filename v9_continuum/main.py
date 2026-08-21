@@ -127,8 +127,8 @@ class V9ContinuumBot:
         # Kalman filter instances for Asia Session: symbol -> tracker
         self.kalman_trackers: Dict[str, KalmanFilterTracker] = {}
         
-        # Core optimized portfolio universe (PWF Sharpe = 2.91, PF = 3.82, Zero Ruin 100%)
-        self.symbols = ["XAUUSD", "USDJPY", "AUDUSD", "USDCAD", "NZDUSD", "EURUSD", "US30", "BTCUSD"]
+        # Core 6 Super-Elite portfolio universe (WinRate = 68.2%, PF = 6.27, Sharpe = 3.97, MaxDD = 1.51%)
+        self.symbols = ["AUDUSD", "NZDUSD", "USDJPY", "XAUUSD", "US30", "BTCUSD"]
 
     def get_hard_sl_multiplier(self, category: str) -> float:
         """Get Hard SL multiplier based on symbol's category."""
