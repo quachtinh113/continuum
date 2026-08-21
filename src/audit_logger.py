@@ -28,13 +28,15 @@ def _init_logger():
 
     _logger.setLevel(getattr(logging, settings.LOG_LEVEL, logging.INFO))
 
-    # Reconfigure streams to support UTF-8 on Windows command prompts
+    # Reconfigure streams to support UTF-8 on Windows command prompts with safe error replacement
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
     try:
-        sys.stderr.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 

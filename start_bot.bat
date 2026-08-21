@@ -21,8 +21,10 @@ if exist .\venv\Scripts\activate.bat (
     echo [WARNING] Khong tim thay thu muc .\venv hoac .\.venv. Se dung Python he thong.
 )
 
-:: Set utf-8 encoding for proper emoji display
+:: Set UTF-8 encoding and code page for emojis and Vietnamese logging
+chcp 65001 >nul 2>&1
 set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 
 :: Auto-restart loop (max 50 restarts to prevent infinite crash loops)
 set /a RESTART_COUNT=0
