@@ -359,12 +359,16 @@ class V9ContinuumBot:
 
             log_decision(symbol, session_str, winner.get("features"), winner["direction"], RiskDecision(True, "Approved by Governor"), "ROUTE")
 
-            # Sizing and routing (Fixed Fractional Risk)
+            # Sizing and routing (Fixed Fractional Risk - 0.8% for Gold, 0.5% for FX/Crypto/Indices)
+            from config.symbols import get_symbol_spec
+            spec = get_symbol_spec(symbol)
+            risk_pct = getattr(settings, "RISK_PER_TRADE_PERCENT_GOLD", 0.8) if (symbol == "XAUUSD" or getattr(spec, "category", "") == "GOLD") else getattr(settings, "RISK_PER_TRADE_PERCENT", 0.5)
+            
             lot_size = self.position_sizer.calculate_lot_size(
                 equity=equity,
                 atr=winner["atr"],
                 symbol=symbol,
-                risk_percent=0.5,
+                risk_percent=risk_pct,
                 ml_score=winner.get("loss_prob"),
                 current_price=winner["price"],
                 open_symbols=list(self.active_cycles.keys())
@@ -374,9 +378,7 @@ class V9ContinuumBot:
                 return
             
             # Hard-SL based on Asset Class multiplier for catastrophic VPS crash backup
-            from config.symbols import get_symbol_spec
-            spec = get_symbol_spec(symbol)
-            multiplier = self.get_hard_sl_multiplier(spec.category)
+            multiplier = self.get_hard_sl_multiplier(getattr(spec, "category", "FX"))
             hard_sl_distance = multiplier * winner["atr"]
             hard_sl = winner["price"] - hard_sl_distance if winner["direction"] == "BUY" else winner["price"] + hard_sl_distance
             
