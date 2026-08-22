@@ -1,0 +1,44 @@
+{
+  "metrics": {
+    "initial_balance": 10000.0,
+    "final_balance": 11654.130787428581,
+    "total_profit_usd": 1654.1307874285812,
+    "profit_percent": 16.541307874285813,
+    "win_rate": 62.70627062706271,
+    "profit_factor": 1.2,
+    "gross_profit": 9838.806459678577,
+    "gross_loss": 8184.675672249991,
+    "max_drawdown_usd": 724.8092382142731,
+    "max_drawdown_percent": 6.451241038002363,
+    "total_cycles": 606,
+    "avg_holding_hours": 11.0,
+    "avg_dca_layers": 0.0,
+    "max_dca_reached": 0,
+    "reasons": {
+      "TRAILING_BE_EXIT": 282,
+      "12H_ML_CUT": 217,
+      "SOFT_ATR_STOP": 98,
+      "TAKE_PROFIT": 8,
+      "DAILY_DRAWDOWN_CUT": 1
+    },
+    "psr": 0.934233446730238
+  },
+  "risk": {
+    "max_dd_usd": 648.5668084642784,
+    "max_dd_pct": 5.78680771047599,
+    "sharpe": 1.402002609872842,
+    "sortino": 2.1195367246195618,
+    "annual_return_pct": 16.552637537213446,
+    "calmar": 2.860409117663929,
+    "recovery_factor": 2.5504400870364474,
+    "max_loss_streak": 8,
+    "trading_days": 261,
+    "win_days": 128,
+    "loss_days": 132
+  },
+  "symbols": [
+    "XAUUSD"
+  ],
+  "veto": 0.85,
+  "years": 0.999315537303217
+}

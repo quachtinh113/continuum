@@ -154,7 +154,7 @@ class V9VirtualPortfolio:
 
 class V9ContinuumBacktester:
     """Historical backtest simulator mirroring the exact V9 Continuum rules."""
-    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None):
+    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None, ml_model_path: str = None, ml_dca_veto_threshold: float = None, us_h4_align: Optional[List[str]] = None, entry_blocked_hours: Optional[Dict[str, List[int]]] = None, session_risk_boost: Optional[Dict[str, Dict[str, Any]]] = None, soft_atr_multiplier: float = None):
         # base_target_usd at $180 – realistic TP zone within normal cycle distribution
         self.data_dir = Path(data_dir)
         self.base_target_usd = base_target_usd
@@ -164,13 +164,86 @@ class V9ContinuumBacktester:
         self.ml_extend_threshold = ml_extend_threshold
         self.ml_cut_threshold = ml_cut_threshold
         self.weekend_pre_close_hour = weekend_pre_close_hour  # None = disabled
+        self.ml_dca_veto_threshold = ml_dca_veto_threshold  # None = DCA gate disabled
+        # Session-tuning experiments (all default None = behaviour unchanged)
+        self.us_h4_align = set(us_h4_align or [])            # symbols whose US momentum entries must align with H4 RSI bias
+        self.entry_blocked_hours = {k: set(v) for k, v in (entry_blocked_hours or {}).items()}
+        self.session_risk_boost = session_risk_boost or {}   # {symbol: {"sessions": [...], "mult": float}}
+        self.soft_atr_multiplier = soft_atr_multiplier if soft_atr_multiplier is not None else V9_REFINED_CONFIG["SOFT_ATR_MULTIPLIER"]
         self.governor = PortfolioGovernor()
         self.position_sizer = PositionSizer()
         self.smc_engine = SMCEngine()
-        self.ml_engine = MLSignalEngine()
+        self.ml_engine = MLSignalEngine(ml_model_path) if ml_model_path else MLSignalEngine()
         self.europe_detector = EuropeRegimeDetector()
         
         self.kalman_trackers: Dict[str, KalmanFilterTracker] = {}
+
+    def build_context_features(self, sym: str, row: Dict[str, Any], hist_records_sym: List[Dict[str, Any]], current_time: datetime, session, direction: Optional[str] = None) -> Dict[str, float]:
+        """Entry-time-observable contextual features shared by the entry veto and the DCA gate."""
+        session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
+        adx_val = row.get("ADX", 20.0)
+        atr_val = row.get("ATR", 0.001)
+
+        if len(hist_records_sym) >= 11:
+            closes_hist = np.array([h["close"] for h in hist_records_sym[-11:]])
+            change = abs(closes_hist[-1] - closes_hist[0])
+            vol = np.sum(np.abs(np.diff(closes_hist)))
+            er_ratio = float(change / vol) if vol > 0 else 0.5
+        else:
+            er_ratio = 0.5
+
+        if len(hist_records_sym) >= 14:
+            tr_hist = [max(h["high"] - h["low"], abs(h["high"] - hist_records_sym[i-1]["close"]), abs(h["low"] - hist_records_sym[i-1]["close"])) for i, h in enumerate(hist_records_sym[-14:], start=len(hist_records_sym)-14)]
+            atr_fast_bkt = float(np.mean(tr_hist))
+            atr_slow_bkt = float(np.mean([max(h["high"] - h["low"], 1e-5) for h in hist_records_sym]))
+            atr_ratio = float(atr_fast_bkt / atr_slow_bkt) if atr_slow_bkt > 0 else 1.0
+        else:
+            atr_ratio = 1.0
+
+        rsi_h1_val = row.get("RSI_H1", 50.0)
+        rsi_m15_val = row.get("RSI_M15", 50.0)
+
+        if len(hist_records_sym) >= 4:
+            rsi_h1_delta = float(rsi_h1_val - hist_records_sym[-4].get("RSI_H1", rsi_h1_val))
+            rsi_m15_delta = float(rsi_m15_val - hist_records_sym[-4].get("RSI_M15", rsi_m15_val))
+        else:
+            rsi_h1_delta = 0.0
+            rsi_m15_delta = 0.0
+
+        feat = {
+            "er_ratio": er_ratio,
+            "atr_ratio": atr_ratio,
+            "rsi_h1_delta": rsi_h1_delta,
+            "rsi_m15_delta": rsi_m15_delta,
+            "adx": adx_val,
+            "rsi_m15": rsi_m15_val,
+            "RSI_M15": rsi_m15_val,
+            "RSI_H1": rsi_h1_val,
+            "RSI_H4": row.get("RSI_H4", 50.0),
+            "ADX": adx_val,
+            "ATR": atr_val,
+            "RSI_Delta": row.get("RSI_Delta", 0.0),
+            "Volatility_Index": atr_val / row["close"],
+            "hour": current_time.hour,
+            "Session_Code": session_map.get(session.value if hasattr(session, "value") else str(session), -1),
+            "RSI_H1_Div": abs(rsi_h1_val - 50.0),
+            "Trend_Vol_Ratio": adx_val * atr_val
+        }
+        # Engineered features consumed by gatekeeper_v2 (harmless extras for v1)
+        is_buy = 1 if direction == "BUY" else 0
+        cat_map = {"XAUUSD": 0, "BTCUSD": 1, "US30": 2, "US500": 2, "US100": 2}
+        feat.update({
+            "is_buy": float(is_buy),
+            "hour_sin": float(np.sin(2 * np.pi * current_time.hour / 24.0)),
+            "hour_cos": float(np.cos(2 * np.pi * current_time.hour / 24.0)),
+            "adx_x_atrratio": float(adx_val * atr_ratio),
+            "rsi_align": float(np.sign(rsi_m15_val - 50.0) * np.sign(rsi_h1_val - 50.0)),
+            "rsi_extreme": float(abs(rsi_m15_val - 50.0)),
+            "trendiness": float(er_ratio * adx_val),
+            "h4_bias_agree": float(1 if ((row.get("RSI_H4", 50.0) > 50.0) == bool(is_buy)) else 0),
+            "asset_class": float(cat_map.get(sym, 3)),
+        })
+        return feat
 
     def prepare_data(self, symbol: str) -> Optional[pd.DataFrame]:
         f_m15 = self.data_dir / f"{symbol}_M15.csv"
@@ -349,7 +422,7 @@ class V9ContinuumBacktester:
                     continue
 
                 # ── Soft ATR Stop (2.2× ATR – tight cycle loss cap) ──
-                soft_stop_distance = V9_REFINED_CONFIG["SOFT_ATR_MULTIPLIER"] * row["ATR"]
+                soft_stop_distance = self.soft_atr_multiplier * row["ATR"]
                 is_sl_hit = False
                 if cycle["direction"] == "BUY" and current_price <= (avg_entry_price - soft_stop_distance):
                     is_sl_hit = True
@@ -491,6 +564,13 @@ class V9ContinuumBacktester:
                     should_dca = True
 
                 if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
+                    # ML DCA gate: skip averaging-down when the context model flags high loss risk
+                    if self.ml_dca_veto_threshold is not None:
+                        dca_sess = get_current_session(current_time)
+                        dca_feat = self.build_context_features(sym, row, history_records[sym], current_time, dca_sess, direction=cycle["direction"])
+                        if self.ml_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
+                            should_dca = False
+                if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
                     # Governor Risk Checks
                     gov_approved, _ = self.governor.check_cross_asset_dca_exposure(
                         sym,
@@ -517,6 +597,11 @@ class V9ContinuumBacktester:
                     price_dist_from_entry = abs(current_price - entry_price)
                     # Regime gate: liquidity sweep already detected (minor_liq_swept) at this extended distance
                     l3_regime_ok = (price_dist_from_entry >= l3_min_dist) and minor_liq_swept
+                    if l3_regime_ok and self.ml_dca_veto_threshold is not None:
+                        dca_sess = get_current_session(current_time)
+                        dca_feat = self.build_context_features(sym, row, history_records[sym], current_time, dca_sess, direction=cycle["direction"])
+                        if self.ml_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
+                            l3_regime_ok = False
                     if l3_regime_ok:
                         # Governor Risk Checks
                         gov_approved, _ = self.governor.check_cross_asset_dca_exposure(
@@ -548,7 +633,11 @@ class V9ContinuumBacktester:
                         sym = row["symbol"]
                         if sym in portfolio.active_cycles:
                             continue
-                            
+
+                        # Per-symbol blocked entry hours (session tuning experiment)
+                        if sym in self.entry_blocked_hours and current_time.hour in self.entry_blocked_hours[sym]:
+                            continue
+
                         # Need at least 50 historical bars to calculate KAMA / OU process
                         if len(history_records[sym]) < 50:
                             continue
@@ -600,56 +689,18 @@ class V9ContinuumBacktester:
                                         sig_val = Signal.SELL
                                         reason = f"US Momentum: KAMA falling and ADX {adx_val:.1f}"
 
+                                # H4 trend alignment gate (session tuning experiment):
+                                # US momentum entries must agree with the H4 RSI bias
+                                if sig_val != Signal.HOLD and sym in self.us_h4_align:
+                                    rsi_h4_bias = row.get("RSI_H4", 50.0)
+                                    if (sig_val == Signal.BUY and rsi_h4_bias <= 50.0) or \
+                                       (sig_val == Signal.SELL and rsi_h4_bias >= 50.0):
+                                        sig_val = Signal.HOLD
+                                        reason = "H4 alignment veto"
+
                         if sig_val != Signal.HOLD:
-                            # XGBoost confirming filter
-                            session_map = {"ASIA": 0, "EUROPE": 1, "US": 2, "OVERLAP_ASIA_EU": 3, "OVERLAP_EU_US": 4, "OFF": -1}
-                            # Contextual features calculation
-                            hist_records_sym = history_records[sym]
-                            if len(hist_records_sym) >= 11:
-                                closes_hist = np.array([h["close"] for h in hist_records_sym[-11:]])
-                                change = abs(closes_hist[-1] - closes_hist[0])
-                                vol = np.sum(np.abs(np.diff(closes_hist)))
-                                er_ratio = float(change / vol) if vol > 0 else 0.5
-                            else:
-                                er_ratio = 0.5
-
-                            if len(hist_records_sym) >= 14:
-                                tr_hist = [max(h["high"] - h["low"], abs(h["high"] - hist_records_sym[i-1]["close"]), abs(h["low"] - hist_records_sym[i-1]["close"])) for i, h in enumerate(hist_records_sym[-14:], start=len(hist_records_sym)-14)]
-                                atr_fast_bkt = float(np.mean(tr_hist))
-                                atr_slow_bkt = float(np.mean([max(h["high"] - h["low"], 1e-5) for h in hist_records_sym]))
-                                atr_ratio = float(atr_fast_bkt / atr_slow_bkt) if atr_slow_bkt > 0 else 1.0
-                            else:
-                                atr_ratio = 1.0
-
-                            rsi_h1_val = row.get("RSI_H1", 50.0)
-                            rsi_m15_val = row.get("RSI_M15", 50.0)
-                            
-                            if len(hist_records_sym) >= 4:
-                                rsi_h1_delta = float(rsi_h1_val - hist_records_sym[-4].get("RSI_H1", rsi_h1_val))
-                                rsi_m15_delta = float(rsi_m15_val - hist_records_sym[-4].get("RSI_M15", rsi_m15_val))
-                            else:
-                                rsi_h1_delta = 0.0
-                                rsi_m15_delta = 0.0
-
-                            feat = {
-                                "er_ratio": er_ratio,
-                                "atr_ratio": atr_ratio,
-                                "rsi_h1_delta": rsi_h1_delta,
-                                "rsi_m15_delta": rsi_m15_delta,
-                                "adx": adx_val,
-                                "rsi_m15": rsi_m15_val,
-                                "RSI_M15": rsi_m15_val,
-                                "RSI_H1": rsi_h1_val,
-                                "RSI_H4": row.get("RSI_H4", 50.0),
-                                "ADX": adx_val,
-                                "ATR": atr_val,
-                                "RSI_Delta": row.get("RSI_Delta", 0.0),
-                                "Volatility_Index": atr_val / row["close"],
-                                "hour": current_time.hour,
-                                "Session_Code": session_map.get(session.value if hasattr(session, "value") else str(session), -1),
-                                "RSI_H1_Div": abs(rsi_h1_val - 50.0),
-                                "Trend_Vol_Ratio": adx_val * atr_val
-                            }
+                            # XGBoost confirming filter (shared contextual feature builder)
+                            feat = self.build_context_features(sym, row, history_records[sym], current_time, session, direction=sig_val.value)
                             loss_prob = self.ml_engine.predict_loss_probability(feat)
                             if loss_prob > self.ml_veto_threshold:
                                 # Vetoed
@@ -663,7 +714,9 @@ class V9ContinuumBacktester:
                                 "atr": atr_val,
                                 "reason": reason,
                                 "price": row["close"],
-                                "loss_prob": loss_prob
+                                "loss_prob": loss_prob,
+                                "features": feat,
+                                "session": session.value if hasattr(session, "value") else str(session)
                             }
                             candidate_tokens.append(token)
 
@@ -683,11 +736,16 @@ class V9ContinuumBacktester:
                         )
                         
                         if approved:
+                            # Session-aware risk boost (session tuning experiment)
+                            entry_risk_pct = self.risk_percent
+                            boost_cfg = self.session_risk_boost.get(sym)
+                            if boost_cfg and winner.get("session") in set(boost_cfg.get("sessions", [])):
+                                entry_risk_pct = self.risk_percent * float(boost_cfg.get("mult", 1.0))
                             lot_size = self.position_sizer.calculate_lot_size(
                                 portfolio.equity,
                                 winner["atr"],
                                 sym,
-                                risk_percent=self.risk_percent,
+                                risk_percent=entry_risk_pct,
                                 ml_score=winner.get("loss_prob"),
                                 current_price=winner["price"],
                                 open_symbols=list(portfolio.active_cycles.keys())
@@ -706,7 +764,12 @@ class V9ContinuumBacktester:
                                 "atr": winner["atr"],
                                 "is_extended": False,
                                 "floating_pnl": 0.0,
-                                "be_activated": False
+                                "be_activated": False,
+                                # Captured for downstream ML training / audit (no behavioural effect)
+                                "features": winner.get("features", {}),
+                                "session": winner.get("session", ""),
+                                "entry_loss_prob": winner.get("loss_prob", 0.0),
+                                "signal_reason": winner.get("reason", "")
                             }
 
         # Calculate final metrics

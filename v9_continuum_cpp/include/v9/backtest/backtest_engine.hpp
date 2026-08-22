@@ -120,22 +120,22 @@ public:
         size_t max_bars = 50000
     ) {
         std::map<std::string, std::vector<Candle>> market_data;
-        size_t min_len = 999999;
+        size_t max_len = 0;
 
         for (const auto& sym : symbols) {
             std::string path = data_dir + "/" + sym + "_M15.csv";
             auto bars = load_csv(path);
             if (!bars.empty()) {
-                if (bars.size() < min_len) min_len = bars.size();
+                if (bars.size() > max_len) max_len = bars.size();
                 market_data[sym] = bars;
             }
         }
 
-        if (market_data.empty() || min_len < 100) {
+        if (market_data.empty() || max_len < 100) {
             return {{}, BacktestMetrics()};
         }
 
-        size_t end_bar = std::min(min_len, start_bar + max_bars);
+        size_t end_bar = std::min(max_len, start_bar + max_bars);
         double balance = initial_balance;
         double equity = initial_balance;
         double peak_equity = initial_balance;
@@ -156,6 +156,7 @@ public:
                 const std::string& sym = pair.first;
                 ActiveCycle& cycle = pair.second;
                 const auto& bars = market_data[sym];
+                if (t >= bars.size()) continue;
                 double curr_price = bars[t].close;
 
                 auto actions = cycle_manager.evaluate_cycle(cycle, curr_price, 1.5, current_time);
@@ -216,6 +217,7 @@ public:
                 if (active_cycles.find(sym) != active_cycles.end()) continue;
 
                 const auto& bars = market_data[sym];
+                if (t >= bars.size() || t < 35) continue;
                 std::vector<double> close_prices;
                 close_prices.reserve(50);
                 for (size_t b = t - 30; b <= t; ++b) {

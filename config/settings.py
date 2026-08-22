@@ -115,6 +115,18 @@ ATR_DCA_CHECK_MULTIPLIER: float = _float("ATR_DCA_CHECK_MULTIPLIER", 2.0)
 RSI_OVEREXTENDED_LOW: float = _float("RSI_OVEREXTENDED_LOW", 30.0)
 RSI_OVEREXTENDED_HIGH: float = _float("RSI_OVEREXTENDED_HIGH", 70.0)
 
+# ── Session Mask: per-symbol blocked entry hours (UTC) ──────
+# Validated on 36m backtest 2026-08-22 (see reports/backtest_36m/BAO_CAO_TONG_HOP.md §9):
+# stable-negative symbol×session combos across two independent windows.
+# 36m: +48.5% PF 1.21 DD 3.54% (vs +39.4% / 5.81% unmasked). New entries only —
+# Exits, DCA and position management are unaffected.
+SESSION_MASK_ACTIVE: bool = _bool("SESSION_MASK_ACTIVE", True)
+ENTRY_BLOCKED_HOURS: dict = {
+    "AUDUSD": {16, 17, 18, 19, 20, 21},          # US session
+    "NZDUSD": {9, 10, 11, 12, 16, 17, 18, 19, 20, 21},  # Europe + US sessions
+    "US30":   {13, 14, 15},                       # EU-US overlap
+}
+
 # ── ML Gatekeeper Parameters ─────────────────────────────────
 ML_GATEKEEPER_ACTIVE: bool = _bool("ML_GATEKEEPER_ACTIVE", True)
 ML_VETO_THRESHOLD: float = _float("ML_VETO_THRESHOLD", 0.85)

@@ -240,6 +240,13 @@ class V9ContinuumBot:
             if symbol in self.active_cycles:
                 continue
 
+            # Session Mask: skip entries during stable-negative sessions for this symbol
+            # (validated 36m backtest 2026-08-22 — BAO_CAO_TONG_HOP.md §9). Exits unaffected.
+            if getattr(settings, "SESSION_MASK_ACTIVE", False):
+                blocked = getattr(settings, "ENTRY_BLOCKED_HOURS", {}).get(symbol)
+                if blocked and datetime.now(timezone.utc).hour in blocked:
+                    continue
+
             # Fetch data (default count = 100)
             rates_m15 = self.connector.get_rates(symbol, "M15", 100)
             rates_h1 = self.connector.get_rates(symbol, "H1", 100)
