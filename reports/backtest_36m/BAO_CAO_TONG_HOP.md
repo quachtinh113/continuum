@@ -398,3 +398,44 @@ Spread median thực (pip): AUD 0.9 · NZD 1.7 · JPY 1.0 · XAU 17.9 · **US30 
 - **Mục 2 — Kalman:** lỗi đơn vị là thật, nhưng cả hai cách sửa đều **làm xấu hồ sơ rủi ro 36m**. Hành vi "fade nến" của vàng/BTC và "phiên Á tắt" của FX — dù không phải thiết kế — là phần đã được kiểm chứng sinh lời. **Giữ nguyên `fixed`**, ghi nhận là "hành vi hiệu dụng" thay vì "Kalman mean-reversion". Code adaptive giữ lại sau flag để nghiên cứu tiếp (ví dụ: chỉ bật khi đã có ≥6 tháng live dữ liệu FX phiên Á).
 
 **Lưu ý parity:** live `evaluate_symbol_signal` dùng `rates_m15` **có nến đang hình thành** làm điểm cuối, backtest dùng nến đã đóng — khác biệt có sẵn từ trước ở mọi phiên, chưa định lượng; nên đồng bộ trong vòng tinh chỉnh sau.
+
+### 15.5 Cấu hình cuối (v2) — kiểm chứng đầy đủ và triển khai
+
+`HYBRID + Governor chấm theo lớp tài sản + spread gate tương đối k=3` (chi phí spread thật từng nến, Kalman fixed, USD-factor giữ nguyên):
+
+| Cửa sổ | Lệnh | WR | Net | PF | Max DD | Sharpe | Calmar | PSR |
+|---|---|---|---|---|---|---|---|---|
+| 36 tháng | 3,735 | 68.6% | **+$5,687 (+56.9%)** | 1.20 | **5.90%** | 2.08 | 3.21 | 100% |
+| Holdout 12m | 1,236 | 70.8% | **+$5,023 (+50.2%/yr)** | 1.48 | 4.33% | 4.01 | 11.6 | 100% |
+
+Theo năm (36m): 2023 −$16 (hòa) · 2024 +$574 · 2025 +$1,548 · 2026 +$3,581. Theo mã: XAU +$3,073 · BTC +$2,087 · JPY +$722 · US30 +$383 · AUD −$302 · NZD −$277. So với nền không gate: net −$30, DD 6.15%→5.90% (gate = bảo hiểm, đúng như kỳ vọng).
+
+**So với con số §12 (mô hình spread cũ, Governor lỗi):** 36m +79.7%→**+56.9%**, holdout +56.4%→**+50.2%**. Đây là con số trung thực hơn; hệ vẫn đạt chuẩn sống sót (DD 36m < 6%, 100% Monte Carlo dương ở §7 với cấu hình gần tương đương).
+
+**Triển khai live 2026-08-22:** `GOVERNOR_SPREAD_MODE="class"`, `SPREAD_GATE_ACTIVE=True` (k=3). Giữ `KALMAN_MODE="fixed"`, `USD_FACTOR_FX_ONLY=False`. Tác động live kỳ vọng lớn nhất: **BTCUSD và US30 bắt đầu được Governor cho vào lệnh** (2 tuần trước: 0 lệnh).
+- Bot v2 khởi động lại 10:58:27 (PID 3856, launcher PID 11392 còn sống, heartbeat tươi), sổ lệnh trống, 144/144 test pass.
+
+---
+
+## 16. Vận hành tuần mới: kiểm tra PnL hằng ngày & kill-switch DD 6%
+
+### 16.1 Báo cáo hằng ngày tự động
+- `scripts/daily_pnl_check.py` — nguồn duy nhất là MT5 `history_deals_get` (audit log không có PnL tin cậy). Xuất `reports/daily/YYYY-MM-DD.md`: balance/equity, tuổi heartbeat (phát hiện bot chết), **DD từ đỉnh equity kể từ triển khai** (persist `logs/deploy_equity_peak.json`), PnL hôm nay / tuần / từ khi triển khai (n, WR, PF, avg, best, worst), PnL theo mã, và **số ROUTE/BLOCKED/SPREAD_GATE/DCA_GATE_VETO theo mã** — để xác nhận BTC/US30 không còn bị bỏ đói.
+- Windows Task Scheduler `V9_Continuum_DailyPnL` chạy `scripts/daily_pnl_check.bat` **06:05 giờ VN hằng ngày** (23:05 UTC — trọn ngày UTC), log vào `logs/daily_check.log`. Exit code 2 khi DD vượt ngưỡng. Gỡ: `schtasks /Delete /TN V9_Continuum_DailyPnL /F`.
+
+### 16.2 Kill-switch DD ≥ 6% (trong bot)
+- `V9ContinuumBot.check_deploy_drawdown()` chạy đầu mỗi vòng `manage_cycles`: DD = (đỉnh equity kể từ `DEPLOY_START_DATE` − equity)/đỉnh. Khi ≥ `DEPLOY_DD_LIMIT_PCT` (6.0): **đóng toàn bộ vị thế**, Governor LOCKED, ghi `logs/DEPLOY_DD_LOCK` (kèm thời điểm/DD/đỉnh/equity) và event `DEPLOY_DD_LOCK` vào audit.
+- Lock **sống qua restart** (file). Mở khóa = quyết định thủ công: xóa `logs/DEPLOY_DD_LOCK` → Governor về OPERATIONAL, đỉnh equity tính lại từ equity hiện tại.
+- Đã mô phỏng 5 kịch bản trong thư mục tạm: đặt đỉnh, DD 5% (không khóa), DD 6.1% (đóng hết + khóa + file), restart với file (vẫn khóa), xóa file (mở khóa). 144/144 test pass.
+- Ngưỡng 6% = p95 Monte Carlo của cấu hình (§7); p99 = 10–11%. Quy tắc 3% DD **trong ngày** có sẵn vẫn hoạt động song song.
+
+### 16.3 Sửa ô nhiễm log test
+`tests/conftest.py` giờ chuyển `settings.LOG_PATH` sang thư mục tạm trong toàn phiên pytest — không còn ghi fixture EURUSD giả vào `logs/audit_*.jsonl`. (Báo cáo ngày 22/08 vẫn chứa 12 dòng CYCLE_OPEN giả từ pytest trước khi sửa.)
+
+### 16.4 Lịch tuần đầu (23–29/08)
+| Ngày | Việc |
+|---|---|
+| Hằng ngày 06:05 | Đọc `reports/daily/*.md`: heartbeat ✅? DD < 6%? BTC/US30 có ROUTE? SPREAD_GATE/DCA_GATE_VETO có kích hoạt hợp lý? |
+| Thứ Tư | So PnL live 3 ngày với kỳ vọng backtest (holdout ≈ +$19/ngày trên $10k → ≈ +$1.7/ngày trên $878) — chỉ xem **dấu và tần suất lệnh**, chưa kết luận thống kê |
+| Cuối tuần | Tổng kết 5 ngày: số lệnh theo mã vs backtest (≈ 5 lệnh/ngày), tỷ lệ TRAILING_BE_EXIT vs SOFT_ATR_STOP, DCA-gate pass/veto |
+| Nếu DD ≥ 6% | Bot tự khóa; **không mở khóa trong ngày** — phân tích nguyên nhân (regime? spread? lỗi?) trước |

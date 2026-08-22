@@ -143,7 +143,7 @@ DCA_ML_GATE_MODEL: str = _get("DCA_ML_GATE_MODEL", "src/ml/gatekeeper_dca_v2.jso
 # ── Relative spread hard-gate (pending backtest validation; BAO_CAO_TONG_HOP.md §14-15) ──
 # Skip NEW entries when current spread > SPREAD_GATE_K x median(spread of last 100 closed M15 bars).
 # Relative rule: fixed SPREAD_LIMIT_* are mis-calibrated (BTC median 2,160 pips > limit 2,000).
-SPREAD_GATE_ACTIVE: bool = _bool("SPREAD_GATE_ACTIVE", False)
+SPREAD_GATE_ACTIVE: bool = _bool("SPREAD_GATE_ACTIVE", True)
 SPREAD_GATE_K: float = _float("SPREAD_GATE_K", 3.0)
 
 # ── Asia Kalman z-score mode (pending backtest validation; BAO_CAO_TONG_HOP.md §14-15) ──
@@ -157,11 +157,17 @@ KALMAN_MODE: str = _get("KALMAN_MODE", "fixed")
 # "raw"  : legacy live tick pips - unit-inconsistent (BTC ~2,000 vs AUD ~1) -> BTC/US30 starved of slots
 # "class": asset-class constant (FX 1 / GOLD 20 / other 1.5; rollover x3-4) = backtest-validated ranking
 # "atr"  : spread as % of ATR (unit-free alternative)
-GOVERNOR_SPREAD_MODE: str = _get("GOVERNOR_SPREAD_MODE", "raw")
+GOVERNOR_SPREAD_MODE: str = _get("GOVERNOR_SPREAD_MODE", "class")
 
 # ── USD-factor rule scope (pending backtest validation; BAO_CAO_TONG_HOP.md §15) ──
 # False: legacy - every elite symbol counts as "USD" (effective cap = 2 concurrent positions)
 USD_FACTOR_FX_ONLY: bool = _bool("USD_FACTOR_FX_ONLY", False)
+
+# ── Deployment drawdown kill-switch (BAO_CAO_TONG_HOP.md §16) ──
+# Equity drawdown from the post-deployment peak >= limit -> close all, lock governor, write
+# logs/DEPLOY_DD_LOCK. The lock survives restarts; delete the file to resume (manual decision).
+DEPLOY_DD_LIMIT_PCT: float = _float("DEPLOY_DD_LIMIT_PCT", 6.0)
+DEPLOY_START_DATE: str = _get("DEPLOY_START_DATE", "2026-08-22")
 
 # ── ML Gatekeeper Parameters ─────────────────────────────────
 ML_GATEKEEPER_ACTIVE: bool = _bool("ML_GATEKEEPER_ACTIVE", True)

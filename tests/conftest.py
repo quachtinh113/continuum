@@ -1,6 +1,17 @@
 import pytest
 from config import settings
 
+@pytest.fixture(autouse=True, scope="session")
+def isolate_audit_logs(tmp_path_factory):
+    """Route audit/event logs written by tests to a temp dir so pytest never pollutes
+    the live logs/audit_*.jsonl files (seen 2026-08-22: fake EURUSD tickets 111/222)."""
+    from pathlib import Path
+    original = settings.LOG_PATH
+    settings.LOG_PATH = Path(tmp_path_factory.mktemp("audit_logs"))
+    yield
+    settings.LOG_PATH = original
+
+
 @pytest.fixture(autouse=True, scope="function")
 def configure_test_settings():
     """Autouse fixture to isolate settings to standard test defaults."""

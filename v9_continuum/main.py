@@ -159,6 +159,58 @@ class V9ContinuumBot:
             else:
                 log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}. System OPERATIONAL")
 
+    def check_deploy_drawdown(self, equity: float) -> bool:
+        """Deployment-level kill-switch: DD from post-deploy equity peak >= DEPLOY_DD_LIMIT_PCT.
+        Persists the peak in logs/deploy_equity_peak.json (shared with scripts/daily_pnl_check.py)
+        and a durable lock file logs/DEPLOY_DD_LOCK. Returns True when trading must stop."""
+        import json as _json
+        from pathlib import Path as _Path
+        lock = _Path("logs/DEPLOY_DD_LOCK")
+        if lock.exists():
+            if self.governor.system_status != "LOCKED":
+                self.governor.system_status = "LOCKED"
+                self.governor.lock_reason = "DEPLOY_DD_LOCK file present (manual unlock: delete the file)"
+                log_error("🔒 Deployment DD lock file present. Trading stays LOCKED until logs/DEPLOY_DD_LOCK is deleted.")
+            return True
+        # Manual unlock path: lock file deleted while this process holds a DEPLOY lock
+        if self.governor.system_status == "LOCKED" and str(self.governor.lock_reason or "").startswith("DEPLOY"):
+            self.governor.system_status = "OPERATIONAL"
+            self.governor.lock_reason = None
+            log_error("🔓 DEPLOY_DD_LOCK removed manually. Governor set OPERATIONAL; new equity peak starts from current equity.")
+            try:
+                _Path("logs/deploy_equity_peak.json").unlink(missing_ok=True)
+            except Exception:
+                pass
+        limit = getattr(settings, "DEPLOY_DD_LIMIT_PCT", 6.0)
+        start = getattr(settings, "DEPLOY_START_DATE", "2026-08-22")
+        pk = _Path("logs/deploy_equity_peak.json")
+        peak = {"peak_equity": equity, "peak_time": datetime.now(timezone.utc).isoformat(), "deploy_start": start}
+        try:
+            if pk.exists():
+                old = _json.loads(pk.read_text(encoding="utf-8"))
+                if old.get("deploy_start") == start and float(old.get("peak_equity", 0)) > equity:
+                    peak = old
+            pk.parent.mkdir(parents=True, exist_ok=True)
+            pk.write_text(_json.dumps(peak, indent=2), encoding="utf-8")
+        except Exception as e:
+            log_error(f"deploy peak persistence error: {e}")
+        dd = (peak["peak_equity"] - equity) / peak["peak_equity"] * 100.0 if peak["peak_equity"] > 0 else 0.0
+        if dd >= limit:
+            log_error(f"🚨 DEPLOYMENT DD KILL-SWITCH: equity ${equity:,.2f} is {dd:.2f}% below peak ${peak['peak_equity']:,.2f} (limit {limit:.1f}%). Closing all positions and locking.")
+            try:
+                self.close_all_positions()
+            except Exception as e:
+                log_error(f"close_all_positions error during deploy kill-switch: {e}")
+            self.governor.system_status = "LOCKED"
+            self.governor.lock_reason = f"DEPLOY DD {dd:.2f}% >= {limit:.1f}%"
+            try:
+                lock.write_text(f"{datetime.now(timezone.utc).isoformat()} DD {dd:.2f}% >= {limit:.1f}% peak {peak['peak_equity']:.2f} equity {equity:.2f}\n", encoding="utf-8")
+            except Exception as e:
+                log_error(f"lock file write error: {e}")
+            log_cycle_event("DEPLOY_DD_LOCK", "PORTFOLIO", "ALL", {"dd_pct": round(dd, 2), "limit": limit, "equity": equity, "peak": peak["peak_equity"]})
+            return True
+        return False
+
     @staticmethod
     def _class_spread_for_scoring(symbol: str) -> float:
         """Asset-class constant spread (pips) used ONLY for governor ranking.
@@ -473,6 +525,10 @@ class V9ContinuumBot:
         """
         acc = self.connector.get_account_info()
         equity = acc["equity"] if acc else 10000.0
+
+        # Deployment-level DD kill-switch (durable lock file)
+        if acc and self.check_deploy_drawdown(equity):
+            return
         
         # Check global drawdown switch
         if self.start_of_day_balance > 0.0:
