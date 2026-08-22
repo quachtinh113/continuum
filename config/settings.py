@@ -148,8 +148,20 @@ SPREAD_GATE_K: float = _float("SPREAD_GATE_K", 3.0)
 
 # ── Asia Kalman z-score mode (pending backtest validation; BAO_CAO_TONG_HOP.md §14-15) ──
 # "fixed"   : original absolute-variance filter (FX never fires, gold/BTC fire on any bar)
-# "adaptive": scale-invariant innovation-variance filter, stateless over last 100 closed M15 bars
+# "adaptive": scale-invariant innovation-variance filter, stateless over last 100 closed M15 bars (all symbols)
+# "adaptive_fx": adaptive for FX pairs only; gold/index/crypto keep "fixed" (backtest-validated: the fixed
+#                filter's fade-any-bar behaviour on gold/BTC is profitable, FX Asia session was dead)
 KALMAN_MODE: str = _get("KALMAN_MODE", "fixed")
+
+# ── Governor spread term (pending backtest validation; BAO_CAO_TONG_HOP.md §15) ──
+# "raw"  : legacy live tick pips - unit-inconsistent (BTC ~2,000 vs AUD ~1) -> BTC/US30 starved of slots
+# "class": asset-class constant (FX 1 / GOLD 20 / other 1.5; rollover x3-4) = backtest-validated ranking
+# "atr"  : spread as % of ATR (unit-free alternative)
+GOVERNOR_SPREAD_MODE: str = _get("GOVERNOR_SPREAD_MODE", "raw")
+
+# ── USD-factor rule scope (pending backtest validation; BAO_CAO_TONG_HOP.md §15) ──
+# False: legacy - every elite symbol counts as "USD" (effective cap = 2 concurrent positions)
+USD_FACTOR_FX_ONLY: bool = _bool("USD_FACTOR_FX_ONLY", False)
 
 # ── ML Gatekeeper Parameters ─────────────────────────────────
 ML_GATEKEEPER_ACTIVE: bool = _bool("ML_GATEKEEPER_ACTIVE", True)

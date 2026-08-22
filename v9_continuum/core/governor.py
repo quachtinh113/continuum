@@ -48,6 +48,11 @@ class PortfolioGovernor:
 
     def is_usd_symbol(self, symbol: str) -> bool:
         """Determines if a symbol is related to the US Dollar."""
+        if getattr(self, "usd_factor_fx_only", False):
+            # Economic USD factor = FX pairs quoted against USD only; gold / indices / crypto
+            # are their own factors (BAO_CAO_TONG_HOP.md §15). Default False = legacy behaviour.
+            fx = {"AUDUSD", "NZDUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF"}
+            return symbol in fx
         return "USD" in symbol or symbol.startswith("US") or symbol.endswith("USD")
 
     def is_gold_or_index(self, symbol: str) -> bool:
@@ -174,7 +179,10 @@ class PortfolioGovernor:
         scored_tokens = []
         for token in tokens:
             adx = token.get("adx", 0.0)
-            spread = token.get("spread", 0.0)
+            # Unit-free cost term when supplied (spread as % of ATR); raw pips otherwise (legacy).
+            # Raw pips are NOT comparable across assets (BTC ~2,000 vs AUD ~1) and starve
+            # high-priced instruments of governor slots - see BAO_CAO_TONG_HOP.md §15.
+            spread = token.get("spread_rel", token.get("spread", 0.0))
             
             # Institutional priority scoring formula
             score = (adx * 0.7) - (spread * 0.3)

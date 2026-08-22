@@ -350,3 +350,51 @@ Thực chất "Asia Mean-Reversion" hiện là: **FX = tắt; vàng/BTC/US30 = f
 ### ⚠️ Phát hiện thứ hai: giới hạn spread không được thực thi
 
 `SPREAD_LIMIT_FX/INDEX/GOLD/CRYPTO` (5/50/50/100) được định nghĩa trong `settings.py` và gắn vào `SymbolSpec.spread_limit`, nhưng **không có chỗ nào chặn lệnh** khi spread vượt ngưỡng — spread chỉ tham gia công thức chấm điểm Governor `ADX×0.7 − spread×0.3`. Lúc trace (cuối tuần): US30 spread 130 > 50, BTC 1000 > 100 mà tín hiệu vẫn đi tới Governor và được approve. Ngày thường spread hẹp nên ít ảnh hưởng, nhưng tại rollover 21–22 UTC / tin tức, bot có thể vào lệnh với chi phí gấp 3–5 lần bình thường. Đề xuất: thêm hard-gate `spread > spec.spread_limit → skip` ngay trong `process_signals` (thay đổi nhỏ, có thể backtest bằng mô hình spread rollover sẵn có của engine).
+
+---
+
+## 15. Spread thật, lỗi đơn vị của Governor, và kiểm tra lại toàn hệ thống
+
+### 15.1 Live audit 10–22/08 (trước HYBRID): hai mã mạnh nhất gần như không giao dịch
+
+| Mã | ROUTE | VETOED (ML v1) | BLOCKED (Governor) | Lý do chính |
+|---|---|---|---|---|
+| XAUUSD | 12,323 | 9,643 | 4,002 | — |
+| BTCUSD | **0** | 0 | 256 | 100% "USD factor concentration exceeded" |
+| US30 | **0** | 417 | 0 | 100% ML veto v1 (đã gỡ trong HYBRID) |
+| USDJPY | 11 | 1,505 | 57 | ML veto v1 |
+| AUDUSD | 29 | 490 | 169 | ML veto v1 + USD factor |
+
+`is_usd_symbol()` = `"USD" in symbol or startswith("US")` → **cả 6 mã elite đều là "USD"** → `max_usd_exposure=2` thực chất là trần 2 vị thế toàn danh mục; BTC (tín hiệu phiên Á) luôn đến sau khi 2 slot đã bị chiếm.
+
+### 15.2 Spread thật từng nến thay mô hình 1/3/20/80 pip
+
+Spread median thực (pip): AUD 0.9 · NZD 1.7 · JPY 1.0 · XAU 17.9 · **US30 260** · **BTC 2,160** (p95 rollover: FX 8–14, XAU 60). Mô hình cũ: crypto/index = **1.5 pip** — sai hàng nghìn lần cho BTC. Ngưỡng `SPREAD_LIMIT` cố định cũng sai hiệu chuẩn (BTC limit 2,000 < median) → gate cố định sẽ giết BTC; gate phải **tương đối** (k × median 100 nến).
+
+### 15.3 Tách bạch "chi phí thật" và "méo lựa chọn" (holdout 12m, HYBRID)
+
+| Cấu hình | Chi phí | Governor chấm điểm | Net | PF | DD | Sharpe |
+|---|---|---|---|---|---|---|
+| HYBRID (§12) | mô hình | mô hình | +$5,642 | 1.54 | 3.97% | 4.29 |
+| `rs_base` | **thật** | **pip thô thật** | +$2,384 | 1.18 | 4.70% | 2.05 |
+| `gov_model` | thật | mô hình (hằng số theo lớp tài sản) | **+$5,023** | **1.48** | 4.33% | **4.01** |
+| `gov_atr` | thật | % ATR (unit-free) | +$4,109 | 1.36 | 5.26% | 3.44 |
+
+→ Thuần chi phí thật: −$619 (−11%). **Lỗi đơn vị của Governor**: −$2,640 — công thức `ADX×0.7 − spread×0.3` với pip thô làm BTC (2,160 pip) không bao giờ thắng cạnh tranh slot. **Live đang chạy đúng lỗi này** (tick spread pip thô) → giải thích BTC 0 lệnh ở §15.1 cùng với quy tắc USD-factor.
+
+### 15.4 Kiểm chứng từng điều chỉnh trên nền đã sửa (chi phí thật + Governor chấm theo lớp tài sản)
+
+| Biến thể | Hold Net | Hold DD | Hold Sharpe | 36m Net | 36m DD | 36m Sharpe | Phán quyết |
+|---|---|---|---|---|---|---|---|
+| Nền: HYBRID + Governor class | +$5,023 | 4.33% | 4.01 | +$5,716 | **6.15%** | 2.11 | ✅ chuẩn mới |
+| + Spread gate k=3 (tương đối) | ≈ +$24 | = | = | (đang chạy tổ hợp) | | | ✅ bảo hiểm rẻ, trung tính |
+| + Kalman adaptive **toàn bộ** (nền thô) | −$806 vs nền thô | 5.98% | 1.56 | ≈ nền thô | 9.79% | 0.65 | ❌ |
+| + Kalman adaptive **chỉ FX** | **+$5,493** | 4.47% | **4.39** | +$4,861 | **12.49%** | 1.83 | ❌ holdout tốt hơn nhưng 36m DD **gấp đôi** |
+| + USD-factor chỉ đếm FX | +$3,917 | 4.09% | 2.99 | (nền thô: PF 1.05, DD 13.5%) | | | ❌ trần 2 vị thế đồng thời là bộ hạn chế variance có ích |
+| Governor chấm theo %ATR | +$4,109 | 5.26% | 3.44 | +$3,798 | 12.53% | 1.50 | ❌ kém hằng số lớp tài sản |
+
+**Kết luận mục 1 & 2 (yêu cầu ban đầu):**
+- **Mục 1 — spread gate:** chấp nhận dạng **tương đối** (k=3 × median 100 nến); ngưỡng cố định `SPREAD_LIMIT_*` bị bác vì sai hiệu chuẩn. Giá trị thực của mục này không nằm ở gate mà ở phát hiện kéo theo: **lỗi đơn vị trong chấm điểm Governor** (−$2,640 holdout, BTC 0 lệnh live 2 tuần).
+- **Mục 2 — Kalman:** lỗi đơn vị là thật, nhưng cả hai cách sửa đều **làm xấu hồ sơ rủi ro 36m**. Hành vi "fade nến" của vàng/BTC và "phiên Á tắt" của FX — dù không phải thiết kế — là phần đã được kiểm chứng sinh lời. **Giữ nguyên `fixed`**, ghi nhận là "hành vi hiệu dụng" thay vì "Kalman mean-reversion". Code adaptive giữ lại sau flag để nghiên cứu tiếp (ví dụ: chỉ bật khi đã có ≥6 tháng live dữ liệu FX phiên Á).
+
+**Lưu ý parity:** live `evaluate_symbol_signal` dùng `rates_m15` **có nến đang hình thành** làm điểm cuối, backtest dùng nến đã đóng — khác biệt có sẵn từ trước ở mọi phiên, chưa định lượng; nên đồng bộ trong vòng tinh chỉnh sau.

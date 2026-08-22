@@ -174,6 +174,8 @@ def main():
     ap.add_argument("--real-spread", action="store_true", help="Use recorded per-bar spread for costs and gate")
     ap.add_argument("--spread-gate", type=float, default=None, help="Skip entries when spread > K x rolling median")
     ap.add_argument("--kalman", default="fixed", choices=["fixed", "adaptive", "adaptive_fx"], help="Asia Kalman z-score mode")
+    ap.add_argument("--gov-spread", default="raw", choices=["raw", "model", "atr"], help="Governor spread term: raw pips | legacy model | %% of ATR")
+    ap.add_argument("--usd-fx-only", action="store_true", help="USD-factor rule counts FX pairs only (not gold/index/crypto)")
     ap.add_argument("--dca-model", default=None, help="Dedicated ML model for the DCA gate")
     ap.add_argument("--session-mask", action="store_true",
                     help="Block stable-negative symbol-session combos (AUDUSD US; NZDUSD EU+US; US30 EU-US overlap)")
@@ -201,7 +203,8 @@ def main():
                                max_dca_layers=args.max_dca, ml_dca_model_path=args.dca_model,
                                ml_enabled=(not args.no_ml),
                                use_real_spread=args.real_spread, spread_gate_k=args.spread_gate,
-                               kalman_mode=args.kalman,
+                               kalman_mode=args.kalman, governor_spread_mode=args.gov_spread,
+                               usd_factor_fx_only=args.usd_fx_only,
                                entry_blocked_hours=({
                                    "AUDUSD": [16, 17, 18, 19, 20, 21],
                                    "NZDUSD": [9, 10, 11, 12, 16, 17, 18, 19, 20, 21],

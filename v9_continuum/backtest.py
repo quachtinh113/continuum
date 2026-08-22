@@ -161,7 +161,7 @@ class V9VirtualPortfolio:
 
 class V9ContinuumBacktester:
     """Historical backtest simulator mirroring the exact V9 Continuum rules."""
-    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None, ml_model_path: str = None, ml_dca_veto_threshold: float = None, us_h4_align: Optional[List[str]] = None, entry_blocked_hours: Optional[Dict[str, List[int]]] = None, session_risk_boost: Optional[Dict[str, Dict[str, Any]]] = None, soft_atr_multiplier: float = None, max_dca_layers: int = 2, ml_dca_model_path: str = None, ml_enabled: bool = True, use_real_spread: bool = False, spread_gate_k: float = None, kalman_mode: str = "fixed"):
+    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None, ml_model_path: str = None, ml_dca_veto_threshold: float = None, us_h4_align: Optional[List[str]] = None, entry_blocked_hours: Optional[Dict[str, List[int]]] = None, session_risk_boost: Optional[Dict[str, Dict[str, Any]]] = None, soft_atr_multiplier: float = None, max_dca_layers: int = 2, ml_dca_model_path: str = None, ml_enabled: bool = True, use_real_spread: bool = False, spread_gate_k: float = None, kalman_mode: str = "fixed", governor_spread_mode: str = "raw", usd_factor_fx_only: bool = False):
         # base_target_usd at $180 – realistic TP zone within normal cycle distribution
         self.data_dir = Path(data_dir)
         self.base_target_usd = base_target_usd
@@ -183,9 +183,11 @@ class V9ContinuumBacktester:
         self.spread_gate_k = spread_gate_k                       # skip entry when spread > k x rolling-median(100 bars); None = off
         self._current_spread: Dict[str, float] = {}
         self.kalman_mode = kalman_mode                           # "fixed" (original) | "adaptive" (scale-invariant)
+        self.governor_spread_mode = governor_spread_mode         # raw pips (legacy) | model (legacy spread model) | atr (% of ATR, unit-free)
         # Optional dedicated model for the DCA gate so entry veto / exits keep using the primary model
         self.ml_dca_engine = MLSignalEngine(ml_dca_model_path) if ml_dca_model_path else None
         self.governor = PortfolioGovernor()
+        self.governor.usd_factor_fx_only = usd_factor_fx_only   # USD-factor rule counts FX pairs only
         self.position_sizer = PositionSizer()
         self.smc_engine = SMCEngine()
         self.ml_engine = MLSignalEngine(ml_model_path) if ml_model_path else MLSignalEngine()
@@ -675,6 +677,7 @@ class V9ContinuumBacktester:
                         adx_val = row.get("ADX", 20.0)
                         atr_val = row.get("ATR", 0.001)
                         spread = get_backtest_spread_pips(sym, current_time.hour)
+                        model_spread = spread
                         if self.use_real_spread:
                             rs = row.get("spread_pips")
                             if rs is not None and not (isinstance(rs, float) and np.isnan(rs)):
@@ -747,7 +750,8 @@ class V9ContinuumBacktester:
                                 "symbol": sym,
                                 "direction": sig_val.value,
                                 "adx": adx_val,
-                                "spread": spread,
+                                "spread": (model_spread if self.governor_spread_mode == "model" else spread),
+                                **({"spread_rel": spread / max(atr_val / get_symbol_spec(sym).pip_size, 1e-9) * 100.0} if self.governor_spread_mode == "atr" else {}),
                                 "atr": atr_val,
                                 "reason": reason,
                                 "price": row["close"],

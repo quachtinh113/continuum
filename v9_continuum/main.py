@@ -22,6 +22,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from config import settings
+from config.symbols import get_symbol_spec
 from src.mt5_connector import MT5Connector
 from src.session_manager import get_current_session, is_weekend, is_market_closing_soon, Session
 from src.audit_logger import log_info, log_error, log_decision, log_cycle_event
@@ -114,6 +115,7 @@ class V9ContinuumBot:
         self.execution = ExecutionEngine(self.connector)
         self.position_sizer = PositionSizer()
         self.governor = PortfolioGovernor()
+        self.governor.usd_factor_fx_only = getattr(settings, "USD_FACTOR_FX_ONLY", False)
         
         self.smc_engine = SMCEngine()
         self.ml_engine = MLSignalEngine()
@@ -157,6 +159,20 @@ class V9ContinuumBot:
             else:
                 log_info(f"📅 Daily reset: Start of Day Balance set to ${self.start_of_day_balance:.2f}. System OPERATIONAL")
 
+    @staticmethod
+    def _class_spread_for_scoring(symbol: str) -> float:
+        """Asset-class constant spread (pips) used ONLY for governor ranking.
+        Mirrors the backtest spread model (FX 1 / GOLD 20 / other 1.5, x3-4 at 21-22 UTC rollover)
+        so live token competition matches the validated backtest ranking."""
+        hour = datetime.now(timezone.utc).hour
+        roll = 21 <= hour < 22
+        cat = get_symbol_spec(symbol).category
+        if cat == "FX":
+            return 3.0 if roll else 1.0
+        if cat in ("GOLD", "COMMODITY"):
+            return 80.0 if roll else 20.0
+        return 4.0 if roll else 1.5
+
     def evaluate_symbol_signal(
         self,
         symbol: str,
@@ -184,7 +200,8 @@ class V9ContinuumBot:
             
             # If theta > 0, the price dynamics show mean-reverting behavior
             if theta > 0:
-                if getattr(settings, "KALMAN_MODE", "fixed") == "adaptive":
+                _kmode = getattr(settings, "KALMAN_MODE", "fixed")
+                if _kmode == "adaptive" or (_kmode == "adaptive_fx" and get_symbol_spec(symbol).category == "FX"):
                     # Scale-invariant, stateless: fresh tracker over the last 100 closed bars (backtest parity)
                     kf = KalmanFilterTracker(mode="adaptive")
                     z_score = 0.0
@@ -360,6 +377,10 @@ class V9ContinuumBot:
                     "direction": sig_val.value,
                     "adx": adx_val,
                     "spread": spread,
+                    **({"spread_rel": spread / max(atr_val / get_symbol_spec(symbol).pip_size, 1e-9) * 100.0}
+                       if getattr(settings, "GOVERNOR_SPREAD_MODE", "raw") == "atr" else
+                       ({"spread_rel": self._class_spread_for_scoring(symbol)}
+                        if getattr(settings, "GOVERNOR_SPREAD_MODE", "raw") == "class" else {})),
                     "atr": atr_val,
                     "reason": reason,
                     "price": rates_m15["close"].iloc[-1],
