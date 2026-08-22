@@ -117,6 +117,10 @@ class V9ContinuumBot:
         
         self.smc_engine = SMCEngine()
         self.ml_engine = MLSignalEngine()
+        # HYBRID: dedicated model for the DCA ML-gate (entries/exits are pure-indicator)
+        self.dca_gate_engine = None
+        if getattr(settings, "DCA_ML_GATE_ACTIVE", False):
+            self.dca_gate_engine = MLSignalEngine(getattr(settings, "DCA_ML_GATE_MODEL", "src/ml/gatekeeper_dca_v2.json"))
         self.europe_detector = EuropeRegimeDetector()
         
         # State tracking
@@ -180,14 +184,21 @@ class V9ContinuumBot:
             
             # If theta > 0, the price dynamics show mean-reverting behavior
             if theta > 0:
-                if symbol not in self.kalman_trackers:
-                    self.kalman_trackers[symbol] = KalmanFilterTracker()
-                
-                kf = self.kalman_trackers[symbol]
-                # Update Kalman Filter with closing prices to get Z-score
-                for p in close_prices[:-1]:
-                    kf.update(p)
-                state_est, z_score = kf.update(current_price)
+                if getattr(settings, "KALMAN_MODE", "fixed") == "adaptive":
+                    # Scale-invariant, stateless: fresh tracker over the last 100 closed bars (backtest parity)
+                    kf = KalmanFilterTracker(mode="adaptive")
+                    z_score = 0.0
+                    for p in close_prices:
+                        state_est, z_score = kf.update(float(p))
+                else:
+                    if symbol not in self.kalman_trackers:
+                        self.kalman_trackers[symbol] = KalmanFilterTracker()
+                    
+                    kf = self.kalman_trackers[symbol]
+                    # Update Kalman Filter with closing prices to get Z-score
+                    for p in close_prices[:-1]:
+                        kf.update(p)
+                    state_est, z_score = kf.update(current_price)
                 
                 # Mean reversion logic: Buy oversold, Sell overbought
                 if z_score < -2.0:
@@ -255,6 +266,23 @@ class V9ContinuumBot:
                 continue
 
             sig_val, reason, adx_val, spread = self.evaluate_symbol_signal(symbol, session, rates_m15, rates_h1)
+
+            # Relative spread hard-gate: abnormal spread (rollover / news) -> no new entry this bar
+            if sig_val != Signal.HOLD and getattr(settings, "SPREAD_GATE_ACTIVE", False) and "spread" in rates_m15.columns:
+                try:
+                    import MetaTrader5 as _mt5
+                    from config.symbols import get_symbol_spec as _gss, get_mt5_name as _gmn
+                    _spec = _gss(symbol); _info = _mt5.symbol_info(_gmn(symbol))
+                    _point = float(_info.point) if _info else _spec.pip_size
+                    _hist_pips = rates_m15["spread"].iloc[:-1].tail(100).astype(float) * _point / _spec.pip_size
+                    _med = float(_hist_pips.median()) if len(_hist_pips) >= 30 else 0.0
+                    _k = getattr(settings, "SPREAD_GATE_K", 3.0)
+                    if _med > 0 and spread > _k * _med:
+                        log_info(f"🚧 Spread gate: {symbol} spread {spread:.1f} > {_k:.1f} x median {_med:.1f} pips. Skipping entry.")
+                        log_decision(symbol, session.value if hasattr(session, "value") else str(session), {"spread": spread, "spread_med": _med}, sig_val.value, RiskDecision(False, f"Spread {spread:.1f} > {_k}x median {_med:.1f}"), "SPREAD_GATE")
+                        continue
+                except Exception as _e:
+                    log_info(f"⚠️ Spread gate evaluation failed for {symbol} ({_e}); proceeding without gate.")
             
             if sig_val != Signal.HOLD:
                 # ENFORCE STRICT CLOSED-BAR RULE: Drop forming bar 0 to guarantee 0% Look-Ahead Bias
@@ -322,7 +350,7 @@ class V9ContinuumBot:
                 
                 loss_prob = self.ml_engine.predict_loss_probability(feat)
                 veto_limit = getattr(settings, "ML_VETO_THRESHOLD", 0.80)
-                if loss_prob > veto_limit:
+                if getattr(settings, "ML_ENTRY_VETO_ACTIVE", True) and loss_prob > veto_limit:
                     log_info(f"🛡️ [ML VETO] Active for {symbol}. Risk: {loss_prob:.4f} > Threshold: {veto_limit:.2f}")
                     log_decision(symbol, session.value if hasattr(session, "value") else str(session), feat, sig_val.value, RiskDecision(False, f"ML filter vetoed due to loss risk {loss_prob:.2f}"), "VETOED")
                     continue
@@ -376,7 +404,7 @@ class V9ContinuumBot:
                 atr=winner["atr"],
                 symbol=symbol,
                 risk_percent=risk_pct,
-                ml_score=winner.get("loss_prob"),
+                ml_score=(winner.get("loss_prob") if getattr(settings, "ML_SIZING_ACTIVE", True) else None),
                 current_price=winner["price"],
                 open_symbols=list(self.active_cycles.keys())
             )
@@ -532,7 +560,7 @@ class V9ContinuumBot:
             else:
                 current_atr_sl = cycle["atr"]
 
-            soft_stop_distance = 2.6 * current_atr_sl
+            soft_stop_distance = getattr(settings, "SOFT_ATR_MULTIPLIER", 2.6) * current_atr_sl
             is_sl_hit = False
             if cycle["direction"] == "BUY" and current_price <= (avg_entry_price - soft_stop_distance):
                 is_sl_hit = True
@@ -613,8 +641,8 @@ class V9ContinuumBot:
                 symbols_to_delete.append(symbol)
                 continue
 
-            # ── 1.5 High-Frequency ML Risk Check (Soft SL) ──
-            if cycle["holding_hours"] >= 1.0:
+            # ── 1.5 High-Frequency ML Risk Check (Soft SL) ── (HYBRID: disabled, never backtested)
+            if getattr(settings, "ML_SOFT_SL_ACTIVE", True) and cycle["holding_hours"] >= 1.0:
                 current_m5_bar = now.minute // 5
                 if current_m5_bar != cycle.get("last_m5_bar"):
                     cycle["last_m5_bar"] = current_m5_bar
@@ -663,8 +691,8 @@ class V9ContinuumBot:
                         symbols_to_delete.append(symbol)
                         continue
 
-            # ── 2. Cognitive ML Time-Cutoff (12H Rule Upgrade) ──
-            if cycle["holding_hours"] >= matrix_config.holding_reduce_hours:
+            # ── 2. Cognitive ML Time-Cutoff (12H Rule Upgrade) ── (HYBRID: disabled; 24H hard cut remains)
+            if getattr(settings, "ML_12H_DECISION_ACTIVE", True) and cycle["holding_hours"] >= matrix_config.holding_reduce_hours:
                 # Fetch indicators for ML cutoff evaluation
                 rates_m15_ex = self.connector.get_rates(symbol, "M15", 100)
                 rates_h1_ex = self.connector.get_rates(symbol, "H1", 100)
@@ -764,7 +792,31 @@ class V9ContinuumBot:
                 if price_dist_from_entry >= l3_min_dist and minor_liq_swept:
                     should_dca = True
 
-            if should_dca and len(cycle["dca_layers"]) < 3:  # Hard limit 3 layers
+            if should_dca and len(cycle["dca_layers"]) < getattr(settings, "MAX_DCA_LAYERS", 3):
+                # 0. HYBRID ML-gate: never add exposure to a losing cycle the context model flags as high-risk
+                if self.dca_gate_engine is not None:
+                    try:
+                        from src.ml.dca_gate import build_gate_features
+                        g_m15 = self.connector.get_rates(symbol, "M15", 100)
+                        g_h1 = self.connector.get_rates(symbol, "H1", 100)
+                        g_h4 = self.connector.get_rates(symbol, "H4", 100)
+                        if g_m15 is not None and g_h1 is not None and len(g_m15) > 15 and len(g_h1) > 15:
+                            gate_feat = build_gate_features(
+                                symbol, cycle["direction"],
+                                g_m15.iloc[:-1], g_h1.iloc[:-1],
+                                (g_h4.iloc[:-1] if g_h4 is not None and len(g_h4) > 1 else None),
+                                now, session)
+                            gate_prob = self.dca_gate_engine.predict_loss_probability(gate_feat)
+                            gate_thr = getattr(settings, "DCA_ML_GATE_THRESHOLD", 0.45)
+                            if gate_prob > gate_thr:
+                                log_info(f"🧠 DCA ML-gate veto for {symbol} L{len(cycle['dca_layers']) + 1}: loss-prob {gate_prob:.3f} > {gate_thr:.2f}")
+                                log_cycle_event("DCA_GATE_VETO", symbol, cycle["direction"], {"price": current_price, "loss_prob": round(float(gate_prob), 4), "layer": len(cycle["dca_layers"]) + 1})
+                                continue
+                            log_info(f"🧠 DCA ML-gate pass for {symbol} L{len(cycle['dca_layers']) + 1}: loss-prob {gate_prob:.3f}")
+                    except Exception as e:
+                        # Fail-safe: if the gate cannot evaluate, do NOT add exposure
+                        log_info(f"⚠️ DCA ML-gate error for {symbol} ({e}); skipping DCA this bar.")
+                        continue
                 # 1. Cross-Asset Exposure Cap Check
                 approved, dca_reason = self.governor.check_cross_asset_dca_exposure(
                     symbol,

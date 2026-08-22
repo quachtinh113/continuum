@@ -127,6 +127,30 @@ ENTRY_BLOCKED_HOURS: dict = {
     "US30":   {13, 14, 15},                       # EU-US overlap
 }
 
+# ── HYBRID architecture (adopted 2026-08-22, BAO_CAO_TONG_HOP.md §12) ──
+# Entries/exits are pure-indicator; ML is used ONLY to gate DCA (asymmetric decision).
+# 36m: +79.7% PF 1.28 DD 5.26% Sharpe 2.54 | holdout 12m: +56.4%/yr PF 1.54 Sharpe 4.29
+SOFT_ATR_MULTIPLIER: float = _float("SOFT_ATR_MULTIPLIER", 2.2)       # was 2.6
+ML_ENTRY_VETO_ACTIVE: bool = _bool("ML_ENTRY_VETO_ACTIVE", False)      # no ML veto at entry
+ML_SOFT_SL_ACTIVE: bool = _bool("ML_SOFT_SL_ACTIVE", False)            # no M5 ML soft-SL exit (never backtested)
+ML_12H_DECISION_ACTIVE: bool = _bool("ML_12H_DECISION_ACTIVE", False)  # no 12h ML cut/extend; 24h hard cut remains
+ML_SIZING_ACTIVE: bool = _bool("ML_SIZING_ACTIVE", False)              # fixed-fractional sizing, no ML lot scaling
+MAX_DCA_LAYERS: int = _int("MAX_DCA_LAYERS", 2)                        # backtest parity (was 3)
+DCA_ML_GATE_ACTIVE: bool = _bool("DCA_ML_GATE_ACTIVE", True)
+DCA_ML_GATE_THRESHOLD: float = _float("DCA_ML_GATE_THRESHOLD", 0.45)   # skip DCA if loss-prob above this
+DCA_ML_GATE_MODEL: str = _get("DCA_ML_GATE_MODEL", "src/ml/gatekeeper_dca_v2.json")
+
+# ── Relative spread hard-gate (pending backtest validation; BAO_CAO_TONG_HOP.md §14-15) ──
+# Skip NEW entries when current spread > SPREAD_GATE_K x median(spread of last 100 closed M15 bars).
+# Relative rule: fixed SPREAD_LIMIT_* are mis-calibrated (BTC median 2,160 pips > limit 2,000).
+SPREAD_GATE_ACTIVE: bool = _bool("SPREAD_GATE_ACTIVE", False)
+SPREAD_GATE_K: float = _float("SPREAD_GATE_K", 3.0)
+
+# ── Asia Kalman z-score mode (pending backtest validation; BAO_CAO_TONG_HOP.md §14-15) ──
+# "fixed"   : original absolute-variance filter (FX never fires, gold/BTC fire on any bar)
+# "adaptive": scale-invariant innovation-variance filter, stateless over last 100 closed M15 bars
+KALMAN_MODE: str = _get("KALMAN_MODE", "fixed")
+
 # ── ML Gatekeeper Parameters ─────────────────────────────────
 ML_GATEKEEPER_ACTIVE: bool = _bool("ML_GATEKEEPER_ACTIVE", True)
 ML_VETO_THRESHOLD: float = _float("ML_VETO_THRESHOLD", 0.85)

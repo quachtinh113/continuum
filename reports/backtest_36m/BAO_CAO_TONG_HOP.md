@@ -180,3 +180,173 @@ Session mask : AUDUSD ∉ US; NZDUSD ∉ EU, US; US30 ∉ OVERLAP_EU_US
 36m: +48.5%, PF 1.21, DD 3.54%, Sharpe 2.17, PSR 100%
 Holdout 12m: +30.9%/yr, PF 1.35, DD 2.03%, Calmar 15.3
 ```
+
+---
+
+## 10. Phản biện: DCA hay không DCA (kết hợp ML và chỉ báo)
+
+### 10.1 Luận cứ CHỐNG DCA (bằng chứng)
+
+**a) Giải phẫu theo chỉ báo — không bối cảnh nào cứu được DCA (4,418 lệnh, full12, không lọc):**
+
+| Bối cảnh lúc vào lệnh | Bucket tốt nhất có DCA | PF |
+|---|---|---|
+| ADX (mọi dải 0→100) | ADX 30–40 | 0.33 |
+| Phiên (5 phiên) | OVERLAP_ASIA_EU | 0.34 |
+| Vol expansion (atr_ratio) | 1.1–1.3 | 0.29 |
+| Thuận/ngược RSI_H4 | ngược H4 | 0.28 |
+| Mã (10 mã) | US30 | 0.33 |
+| ADX × phiên (9 tổ hợp) | ADX>25 × EUROPE | 0.43 |
+
+→ Không có chỉ báo đơn nào biến DCA thành dương; bất kỳ "DCA có điều kiện chỉ báo" nào cũng chỉ hội tụ về "ít DCA hơn".
+
+**b) Hình dạng rủi ro (elite6, stop 2.6, khác biệt duy nhất là DCA):**
+
+| | Có DCA | Không DCA |
+|---|---|---|
+| Net 36m | +$2,604 | +$2,608 (**giống nhau**) |
+| Avg loss | −$18.2 | −$14.6 |
+| Skewness | −0.33 | +0.24 |
+| p1 trade PnL | −$64 | −$40 |
+| MC P(DD ≥ 10%) | **27.3%** | 12.7% |
+| MC P(DD ≥ 15%) | 5.0% | 1.2% |
+
+→ Ở config cũ, DCA **không thêm kỳ vọng, chỉ thêm đuôi trái**. Con số "chu kỳ DCA lỗ −$8.7k" ở mức trade phóng đại thiệt hại thật: cùng những chu kỳ bất lợi đó không DCA vẫn dính stop; khác biệt thật là variance.
+
+### 10.2 Luận cứ BẢO VỆ DCA (bằng chứng — đây là phần bất ngờ)
+
+Khi đặt DCA lên **config mới** (stop 2.2×ATR + session mask), kết quả đảo chiều:
+
+| Config (elite6, stop 2.2, mask) | 36m Net | 36m DD | 36m Sharpe | Hold Net | Hold DD | Hold Sharpe | Hold Calmar |
+|---|---|---|---|---|---|---|---|
+| Không DCA | +$4,853 | **3.54%** | 2.17 | +$3,094 | **2.03%** | 3.09 | 15.3 |
+| DCA tối đa 1 layer | +$5,404 | 4.54% | 2.16 | +$3,575 | 2.83% | 3.16 | 12.6 |
+| DCA 2 layer (gốc) | +$5,976 | 5.53% | 2.24 | +$3,840 | 3.00% | 3.22 | 12.8 |
+| **DCA 2 layer + ML-gate v2 (OOS, thr 0.45)** | **+$5,997** | 4.59% | **2.35** | **+$3,881** | 2.39% | **3.41** | **16.3** |
+
+**Cơ chế giải thích nghịch lý:** với stop 2.6×ATR, layer 2 đặt tại 2.5×ATR — ngay sát stop → gần như luôn bị cắt với 3× exposure (avg layer-2 cycle: −$21.9). Với stop 2.2×ATR, layer 2 hiếm khi chạm tới (avg DCA giảm 0.22→0.15), DCA thực chất thành 1 layer tại 1.5×ATR; giá vào trung bình thấp hơn giúp chu kỳ bất lợi hồi về BE nhiều hơn. Chu kỳ DCA vẫn lỗ ở mức trade (layer 1: −$3.9, layer 2: −$18.2) nhưng **ít hơn phương án để base lot dính stop** → net danh mục cao hơn ~$1,100/36m.
+
+**ML-gate làm được gì:** model v2 (AUC 0.59, quá yếu để làm veto vào lệnh) lại **đủ tốt để gác cổng DCA**: giữ nguyên lợi nhuận của DCA 2 layer (+$5,997) nhưng kéo DD về 4.59% (từ 5.53%) và holdout DD 2.39% (từ 3.00%) — Calmar 16.3, cao nhất mọi cấu hình. Lý do: quyết định DCA là quyết định "có tăng exposure vào vị thế đang lỗ không" — chi phí sai lầm lớn và bất đối xứng, nên ngay cả phân loại yếu cũng có giá trị; còn quyết định vào lệnh có chi phí sai lầm nhỏ (stop chặt) nên phân loại yếu chỉ cắt volume.
+
+### 10.3 Phán quyết
+
+1. **DCA nguyên bản (stop 2.6, 2 layer, không mask): BỎ** — return-neutral, risk-additive, P(DD≥10%) 27%.
+2. **DCA trên nền config mới: GIỮ, có ML-gate** — config tốt nhất toàn cục: `stop 2.2 + mask + DCA 2 layer + ML-gate v2 @0.45`.
+3. Nếu ưu tiên DD tối thiểu tuyệt đối (quỹ prop rule chặt): **Không DCA** vẫn là lựa chọn bảo thủ hợp lệ (DD 3.54%/2.03%), đổi ~20% lợi nhuận lấy ~1 điểm DD.
+4. Bài học phương pháp: **một thành phần không tốt/xấu cố định — nó tốt/xấu trong tương tác với tham số khác**. Kết luận "DCA phá hủy" ở §2 đúng với config cũ và sai với config mới; chỉ backtest in-engine mới phát hiện được, phân tích trade-level không thể.
+
+**Caveat:** ML-gate dùng model v2_oos (học 24 tháng đầu) → 12 tháng holdout là OOS thật; 24 tháng đầu của cửa sổ 36m là in-sample cho model. Ngưỡng 0.45 chọn từ sweep OOF, chưa tối ưu riêng cho DCA.
+
+---
+
+## 11. ML vs Không ML — đối chứng trên cùng nền config (elite6, no-DCA, stop 2.2, mask)
+
+Định nghĩa 3 chế độ:
+- **Không ML (thuần chỉ báo):** không veto vào lệnh, không quyết định ML ở mốc 12h (chỉ stop 2.2×ATR, trailing BE, 24h hard cut), sizing không điều chỉnh theo ML.
+- **ML v1 (live hiện tại):** model thoái hóa → thực chất = time-stop 12h cố định + sizing ×0.7 mọi lệnh.
+- **ML v2 (OOS-clean):** model thật (AUC 0.59) làm veto vào lệnh @0.50 + quyết định 12h.
+
+| Chế độ | 36m Net | 36m PF | 36m DD | 36m Sharpe | Hold Net | Hold PF | Hold DD | Hold Sharpe |
+|---|---|---|---|---|---|---|---|---|
+| **Không ML** | **+$6,361** | **1.24** | 5.70% | **2.32** | **+$4,794** | **1.49** | 3.91% | **4.10** |
+| ML v1 (live) | +$4,853 | 1.21 | **3.54%** | 2.17 | +$3,094 | 1.35 | **2.03%** | 3.09 |
+| ML v2 | +$3,150 | 1.13 | 6.08% | 1.56 | +$843 | 1.09 | 7.58% | 1.04 |
+
+**Đọc kết quả:**
+1. **Thuần chỉ báo thắng về lợi nhuận & Sharpe trên cả hai cửa sổ** (+31% net 36m, +55% net holdout so với ML v1). Cơ chế: bỏ cut 12h cố định → lệnh giữ trung bình 11.5h thay vì 10h, để trailing BE và 24h hard cut làm việc; bỏ sizing ×0.7 → lot đúng risk budget.
+2. **ML v1 có một giá trị thật: giảm DD** (3.54% vs 5.70%; 2.03% vs 3.91%) — vì cut 12h hoạt động như "time-stop" hạn chế thời gian phơi nhiễm. Nhưng đó là time-stop, không phải ML; có thể tái tạo bằng quy tắc cố định không cần model.
+3. **ML v2 làm veto vào lệnh là tệ nhất** — nhất quán với §3: AUC 0.59 quá yếu, cắt volume ở regime đang lãi, và khi cắm vào quyết định 12h thì phá vỡ hành vi đã tinh chỉnh.
+4. Kết hợp với §10: ML v2 **có giá trị ở đúng một chỗ — gác cổng DCA** (quyết định bất đối xứng, chi phí sai lầm lớn). → Kiến trúc ML hợp lý: **ML không quyết định vào/ra lệnh; ML chỉ quyết định có tăng exposure hay không.**
+
+---
+
+## 12. Xếp hạng toàn bộ cấu hình & Con đường tối ưu
+
+Tất cả chạy trên elite6, stop 2.2×ATR, session mask (trừ dòng đầu = live cũ).
+
+| # | Cấu hình | 36m Net | 36m DD | 36m Sharpe | Hold Net | Hold DD | Hold Sharpe | Hold Calmar |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Live cũ (ML v1, DCA 2, stop 2.6, không mask) | +$2,604 | 10.66% | 1.15 | +$2,363 | 7.33% | 2.19 | 3.2 |
+| 1 | ML v2 veto + no-DCA | +$3,150 | 6.08% | 1.56 | +$843 | 7.58% | 1.04 | 1.1 |
+| 2 | ML v1 + no-DCA | +$4,853 | **3.54%** | 2.17 | +$3,094 | **2.03%** | 3.09 | 15.3 |
+| 3 | ML v1 + DCA 2 + ML-gate | +$5,997 | 4.59% | 2.35 | +$3,881 | 2.39% | 3.41 | 16.3 |
+| 4 | Không ML + no-DCA | +$6,361 | 5.70% | 2.32 | +$4,794 | 3.91% | 4.10 | 12.3 |
+| **5** | **HYBRID: Không ML vào/ra + DCA 2 + ML-gate DCA** | **+$7,966 (+79.7%)** | 5.26% | **2.54** | **+$5,642 (+56.4%/yr)** | 3.97% | **4.29** | 14.2 |
+
+**Hồ sơ sống sót HYBRID (36m):** 4/4 năm dương (+$296 / +$1,495 / +$2,128 / +$4,047), 29/37 tháng lãi, tháng xấu nhất −$546, underwater dài nhất 181 ngày. Monte Carlo 5,000: 100% có lãi, final p5 $15,347 / median $17,972, MaxDD p99 = 10.3%, P(DD≥10%) = 1.2%, P(DD≥15%) = 0%. Holdout: 11/13 tháng lãi, tháng xấu nhất −$51, PF 1.54.
+
+**Rủi ro tập trung giảm:** 36m theo mã — XAUUSD +$3,130, BTCUSD +$2,467, USDJPY +$1,186, US30 +$1,106, AUDUSD +$78, NZDUSD −$4. Năm mã dương thay vì hai.
+
+### Con đường tối ưu (kết luận của toàn bộ nghiên cứu)
+
+```
+KIẾN TRÚC:
+  Vào lệnh  : thuần chỉ báo (OU/Kalman Á · SMC-HMM Âu · KAMA+ADX Mỹ), KHÔNG ML veto
+  Ra lệnh   : stop 2.2×ATR(H1) · trailing BE · 24h hard cut — KHÔNG cut 12h bằng ML
+  Sizing    : fixed-fractional theo ATR, KHÔNG điều chỉnh theo ML score
+  DCA       : tối đa 2 layer (1.5 / 2.5 ×ATR), chỉ khi ML-gate v2 cho phép (loss-prob ≤ 0.45)
+  Phiên     : session mask (AUDUSD ∉ US; NZDUSD ∉ EU,US; US30 ∉ OVERLAP_EU_US)
+  Universe  : 6 Elite (AUDUSD, NZDUSD, USDJPY, XAUUSD, US30, BTCUSD)
+
+NGUYÊN TẮC RÚT RA:
+  1. ML không nên quyết định vào/ra lệnh khi AUC < 0.65 — nó chỉ cắt volume ở regime đang lãi.
+  2. ML có giá trị ở quyết định BẤT ĐỐI XỨNG: "có tăng exposure vào vị thế đang lỗ không".
+  3. Tham số không tốt/xấu tuyệt đối: DCA phá hủy với stop 2.6, sinh lời với stop 2.2.
+  4. Mọi "edge" từ thống kê trade-level phải qua backtest in-engine (slot tái phân bổ).
+```
+
+**Caveat cuối:** (i) cấu hình được chọn qua nhiều vòng thí nghiệm trên cùng 36m dữ liệu → rủi ro selection bias tích lũy; holdout 12 tháng chỉ "mù" với model v2_oos, không mù với lựa chọn tham số. (ii) Khuyến nghị triển khai theo bậc: demo 4 tuần → live risk 50% → full risk; dừng nếu DD live vượt 6% (≈ p95 Monte Carlo). (iii) Fill mô phỏng close M15 + slippage ước lượng; live có thể kém 10–20%.
+
+---
+
+## 13. Nhật ký triển khai HYBRID lên live (2026-08-22)
+
+| Hạng mục | Thay đổi | File |
+|---|---|---|
+| Stop | 2.6 → **2.2×ATR** (`SOFT_ATR_MULTIPLIER`) | `config/settings.py`, `main.py` |
+| ML veto vào lệnh | **TẮT** (`ML_ENTRY_VETO_ACTIVE=False`) | `main.py` |
+| SOFT_ML_SL (M5 risk exit) | **TẮT** — exit này chưa từng được backtest; với v1≈0.89>0.70 nó đóng gần như mọi lệnh sớm → nghi phạm chính khiến live kém backtest | `main.py` |
+| ML 12h cut/extend | **TẮT**; 24h hard cut giữ | `main.py` |
+| ML sizing ×0.7/×1.5 | **TẮT** (`ML_SIZING_ACTIVE=False`) | `main.py` |
+| DCA | tối đa **2 layer** (từ 3, parity backtest) + **ML-gate** `gatekeeper_dca_v2.json` @0.45, fail-safe: lỗi gate → không DCA | `main.py`, `src/ml/dca_gate.py` |
+| Session mask | đã áp dụng từ trước | — |
+
+**Kiểm chứng trước restart:** parity feature live-vs-backtest sai số median ≤0.16% (30 lệnh mẫu), pytest 144/144 pass, gate end-to-end trên MT5 thật cho xác suất 0.38–0.61 (US30 veto, còn lại pass).
+
+**Sự cố phát hiện:** bot và launcher đã chết ~8h trước khi triển khai (heartbeat cũ 28,428s) — launcher `start_bot.bat` không còn process. Đã khởi động lại qua launcher (có vòng auto-restart). Bot mới PID 7448, heartbeat tươi. Sổ lệnh trống lúc restart.
+
+**Lưu ý vận hành:** (1) `pytest` ghi fixture giả (EURUSD ticket 111/222) vào `logs/audit_*.jsonl` thật — cần tách audit path cho test. (2) Mọi flag HYBRID có thể rollback qua env (`ML_ENTRY_VETO_ACTIVE=true`, `SOFT_ATR_MULTIPLIER=2.6`, …) không cần sửa code. (3) Kế hoạch: theo dõi 4 tuần; ngưỡng dừng DD live 6%; retrain gate model hằng quý từ `training_data.csv` bằng `scripts/train_gatekeeper_v2.py`.
+
+---
+
+## 14. Kiểm tra pipeline live: lấy dữ liệu → chỉ báo → regime → khối alpha → Governor (2026-08-22 03:01 UTC, thứ Bảy)
+
+Công cụ: `scratch/trace_alpha_pipeline.py` — chạy đúng các hàm của bot (`MT5Connector.get_rates`, `V9ContinuumBot.evaluate_symbol_signal`, `PortfolioGovernor.process_token_queue/evaluate_risk_matrix`) ở chế độ read-only, song song với bot live.
+
+| Tầng | Kết quả | Đánh giá |
+|---|---|---|
+| Kết nối MT5 | connect OK, account 206539306, balance $878.20, 2 model nạp (v1 + DCA-gate 23 feature) | ✅ |
+| Dữ liệu 6 mã × M15/H1/H4 | 100 bar/khung, 0 NaN, latency 0–36 ms; FX/vàng/US30 bar đóng cuối cách 376–421 phút (đóng cửa thứ Sáu), BTC tươi 1 phút; gaps H4=3 (cuối tuần), XAU/US30 H1 gaps=4 (rollover hằng ngày) | ✅ đúng kỳ vọng cuối tuần |
+| Phiên & mask | session=ASIA, is_weekend=True; mask mở cho cả 6 mã lúc 03h UTC | ✅ |
+| Khối alpha | Chạy 0–16 ms/mã; tạo 2 tín hiệu (XAUUSD BUY, BTCUSD SELL), 4 HOLD | ✅ chạy; ⚠️ xem lỗi dưới |
+| Governor | Queue 2 token → winner XAUUSD BUY; risk matrix approved | ✅ |
+| Bot live | heartbeat 4 s, 0 lỗi; 0 bản ghi audit vì `is_weekend` → standby (đúng thiết kế) | ✅ |
+
+### ⚠️ Lỗi thiết kế trong khối alpha phiên Á: Kalman Z-score không bất biến theo đơn vị giá
+
+`KalmanFilterTracker(q=1e-4, r=1e-2)` dùng phương sai **tuyệt đối theo đơn vị giá**. Sau khi hội tụ, `sqrt(p+r) = 0.1046` cho **mọi** tài sản, nên `z = (close − ước lượng) / 0.1046`:
+
+| Mã | Biến động M15 cuối | z-score | Hệ quả |
+|---|---|---|---|
+| AUDUSD | 0.00008 | −0.00 | **không bao giờ** vượt ±2 → phiên Á chết hẳn (0 lệnh ASIA trong 36m) |
+| NZDUSD | 0.00019 | −0.00 | như trên |
+| USDJPY | 0.003 | −0.03 | gần như chết (chỉ fire khi nến ≥0.21 JPY) |
+| XAUUSD | 4.01 | **−95.8** | fire với **bất kỳ** nến nào > $0.21 |
+| US30 | 9 | +207 | như trên (chỉ còn OU theta>0 làm bộ lọc) |
+| BTCUSD | 5.8 | **+3,430** | như trên |
+
+Thực chất "Asia Mean-Reversion" hiện là: **FX = tắt; vàng/BTC/US30 = fade nến M15 vừa đóng** (nến đỏ → BUY, nến xanh → SELL), chỉ lọc bởi OU θ>0. Backtest dùng cùng tracker/cùng tham số nên **mọi con số đã kiểm chứng đều đã bao gồm hành vi này** — cấu hình HYBRID vẫn hợp lệ, nhưng khối alpha không làm điều nó tuyên bố. Ghi nhận BTC ASIA là phân khúc lãi lớn nhất (+$1,163/36m) — tức bản "lỗi" này đang sinh lời; **không hot-fix trên live**; muốn sửa (chuẩn hóa z theo ATR hoặc log-return) phải qua backtest 36m + holdout như mọi thay đổi khác.
+
+### ⚠️ Phát hiện thứ hai: giới hạn spread không được thực thi
+
+`SPREAD_LIMIT_FX/INDEX/GOLD/CRYPTO` (5/50/50/100) được định nghĩa trong `settings.py` và gắn vào `SymbolSpec.spread_limit`, nhưng **không có chỗ nào chặn lệnh** khi spread vượt ngưỡng — spread chỉ tham gia công thức chấm điểm Governor `ADX×0.7 − spread×0.3`. Lúc trace (cuối tuần): US30 spread 130 > 50, BTC 1000 > 100 mà tín hiệu vẫn đi tới Governor và được approve. Ngày thường spread hẹp nên ít ảnh hưởng, nhưng tại rollover 21–22 UTC / tin tức, bot có thể vào lệnh với chi phí gấp 3–5 lần bình thường. Đề xuất: thêm hard-gate `spread > spec.spread_limit → skip` ngay trong `process_signals` (thay đổi nhỏ, có thể backtest bằng mô hình spread rollover sẵn có của engine).

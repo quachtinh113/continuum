@@ -35,6 +35,13 @@ from v9_continuum.layers.signal import SMCEngine, MLSignalEngine, Signal
 from src.session_manager import get_current_session, is_weekend, is_market_closing_soon, Session
 from config.symbols import get_symbol_spec, get_all_symbols
 
+# MT5 point size per symbol (Exness, verified 2026-08-22) -> converts recorded bar spread (points) to pips
+POINT_SIZE = {
+    "AUDUSD": 1e-05, "NZDUSD": 1e-05, "EURUSD": 1e-05, "GBPUSD": 1e-05, "USDCAD": 1e-05, "USDCHF": 1e-05,
+    "USDJPY": 0.001, "XAUUSD": 0.001, "US30": 0.1, "BTCUSD": 0.01, "US500": 0.01, "US100": 0.01,
+}
+
+
 def get_backtest_spread_pips(symbol: str, current_hour: int) -> float:
     """Simulates rollover spread widening (21:00 - 22:00 UTC)."""
     is_rollover = (21 <= current_hour < 22)
@@ -154,7 +161,7 @@ class V9VirtualPortfolio:
 
 class V9ContinuumBacktester:
     """Historical backtest simulator mirroring the exact V9 Continuum rules."""
-    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None, ml_model_path: str = None, ml_dca_veto_threshold: float = None, us_h4_align: Optional[List[str]] = None, entry_blocked_hours: Optional[Dict[str, List[int]]] = None, session_risk_boost: Optional[Dict[str, Dict[str, Any]]] = None, soft_atr_multiplier: float = None):
+    def __init__(self, data_dir: str = "data/historical", base_target_usd: float = 180.0, risk_percent: float = 0.15, dca_multiplier_scale: float = 1.0, ml_veto_threshold: float = 0.60, ml_extend_threshold: float = 0.40, ml_cut_threshold: float = 0.65, weekend_pre_close_hour: int = None, ml_model_path: str = None, ml_dca_veto_threshold: float = None, us_h4_align: Optional[List[str]] = None, entry_blocked_hours: Optional[Dict[str, List[int]]] = None, session_risk_boost: Optional[Dict[str, Dict[str, Any]]] = None, soft_atr_multiplier: float = None, max_dca_layers: int = 2, ml_dca_model_path: str = None, ml_enabled: bool = True, use_real_spread: bool = False, spread_gate_k: float = None, kalman_mode: str = "fixed"):
         # base_target_usd at $180 – realistic TP zone within normal cycle distribution
         self.data_dir = Path(data_dir)
         self.base_target_usd = base_target_usd
@@ -170,6 +177,14 @@ class V9ContinuumBacktester:
         self.entry_blocked_hours = {k: set(v) for k, v in (entry_blocked_hours or {}).items()}
         self.session_risk_boost = session_risk_boost or {}   # {symbol: {"sessions": [...], "mult": float}}
         self.soft_atr_multiplier = soft_atr_multiplier if soft_atr_multiplier is not None else V9_REFINED_CONFIG["SOFT_ATR_MULTIPLIER"]
+        self.max_dca_layers = max_dca_layers                     # passive layers cap (default 2 = original behaviour)
+        self.ml_enabled = ml_enabled                             # False = pure-indicator mode (no veto, no 12h ML decision, no ML sizing)
+        self.use_real_spread = use_real_spread                   # cost + gate from recorded per-bar spread instead of the 1/3/20/80 model
+        self.spread_gate_k = spread_gate_k                       # skip entry when spread > k x rolling-median(100 bars); None = off
+        self._current_spread: Dict[str, float] = {}
+        self.kalman_mode = kalman_mode                           # "fixed" (original) | "adaptive" (scale-invariant)
+        # Optional dedicated model for the DCA gate so entry veto / exits keep using the primary model
+        self.ml_dca_engine = MLSignalEngine(ml_dca_model_path) if ml_dca_model_path else None
         self.governor = PortfolioGovernor()
         self.position_sizer = PositionSizer()
         self.smc_engine = SMCEngine()
@@ -286,6 +301,10 @@ class V9ContinuumBacktester:
         master["RSI_Delta"] = master["RSI_H4"] - master["RSI_M15"]
         master["Volatility_Index"] = master["ATR"] / master["close"]
         
+        if "spread" in master.columns:
+            spec = get_symbol_spec(symbol)
+            master["spread_pips"] = master["spread"].astype(float) * POINT_SIZE.get(symbol, spec.pip_size) / spec.pip_size
+            master["spread_med"] = master["spread_pips"].shift(1).rolling(100, min_periods=30).median()
         master["symbol"] = symbol
         return master.reset_index()
 
@@ -350,8 +369,10 @@ class V9ContinuumBacktester:
             z_scores_map = {}
             for r in step_data:
                 sym = r["symbol"]
+                if self.use_real_spread and r.get("spread_pips") is not None and not (isinstance(r.get("spread_pips"), float) and np.isnan(r["spread_pips"])):
+                    self._current_spread[sym] = float(r["spread_pips"])
                 if sym not in self.kalman_trackers:
-                    self.kalman_trackers[sym] = KalmanFilterTracker()
+                    self.kalman_trackers[sym] = KalmanFilterTracker(mode=self.kalman_mode)
                 _, z_score = self.kalman_trackers[sym].update(r["close"])
                 z_scores_map[sym] = z_score
 
@@ -507,11 +528,11 @@ class V9ContinuumBacktester:
                         "RSI_H1_Div": abs(row.get("RSI_H1", 50.0) - 50.0),
                         "Trend_Vol_Ratio": row.get("ADX", 20.0) * cycle["atr"]
                     }
-                    risk_score = self.ml_engine.predict_loss_probability(feat)
+                    risk_score = self.ml_engine.predict_loss_probability(feat) if self.ml_enabled else None
                     
                     max_hours = matrix_config.max_holding_hours if cycle["is_extended"] else matrix_config.holding_reduce_hours
                     
-                    if cycle["holding_hours"] >= max_hours:
+                    if self.ml_enabled and cycle["holding_hours"] >= max_hours:
                         if not cycle["is_extended"] and risk_score < self.ml_extend_threshold:
                             cycle["is_extended"] = True
                         elif self.ml_extend_threshold <= risk_score <= self.ml_cut_threshold:
@@ -563,14 +584,15 @@ class V9ContinuumBacktester:
                 elif cycle["direction"] == "SELL" and current_price >= (entry_price + spacing_price):
                     should_dca = True
 
-                if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
+                if should_dca and len(cycle["dca_layers"]) < self.max_dca_layers and not day_drawdown_locked:
                     # ML DCA gate: skip averaging-down when the context model flags high loss risk
                     if self.ml_dca_veto_threshold is not None:
                         dca_sess = get_current_session(current_time)
                         dca_feat = self.build_context_features(sym, row, history_records[sym], current_time, dca_sess, direction=cycle["direction"])
-                        if self.ml_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
+                        dca_engine = self.ml_dca_engine or self.ml_engine
+                        if dca_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
                             should_dca = False
-                if should_dca and len(cycle["dca_layers"]) < 2 and not day_drawdown_locked:
+                if should_dca and len(cycle["dca_layers"]) < self.max_dca_layers and not day_drawdown_locked:
                     # Governor Risk Checks
                     gov_approved, _ = self.governor.check_cross_asset_dca_exposure(
                         sym,
@@ -600,7 +622,8 @@ class V9ContinuumBacktester:
                     if l3_regime_ok and self.ml_dca_veto_threshold is not None:
                         dca_sess = get_current_session(current_time)
                         dca_feat = self.build_context_features(sym, row, history_records[sym], current_time, dca_sess, direction=cycle["direction"])
-                        if self.ml_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
+                        dca_engine = self.ml_dca_engine or self.ml_engine
+                        if dca_engine.predict_loss_probability(dca_feat) > self.ml_dca_veto_threshold:
                             l3_regime_ok = False
                     if l3_regime_ok:
                         # Governor Risk Checks
@@ -652,12 +675,26 @@ class V9ContinuumBacktester:
                         adx_val = row.get("ADX", 20.0)
                         atr_val = row.get("ATR", 0.001)
                         spread = get_backtest_spread_pips(sym, current_time.hour)
+                        if self.use_real_spread:
+                            rs = row.get("spread_pips")
+                            if rs is not None and not (isinstance(rs, float) and np.isnan(rs)):
+                                spread = float(rs)
+                        # Relative spread hard-gate: abnormal spread (rollover / news) -> no new entry
+                        if self.spread_gate_k is not None:
+                            med = row.get("spread_med")
+                            if med is not None and not (isinstance(med, float) and np.isnan(med)) and med > 0 and spread > self.spread_gate_k * med:
+                                continue
                         
                         # 1. ASIA Session Mean Reversion (Ornstein-Uhlenbeck + Kalman Z-score)
                         if session in [Session.ASIA, Session.OVERLAP_ASIA_EU]:
                             theta, mu, sigma = fit_ou_process(close_prices)
                             if theta > 0:
                                 z_score = z_scores_map[sym]
+                                if self.kalman_mode == "adaptive" or (self.kalman_mode == "adaptive_fx" and get_symbol_spec(sym).category == "FX"):
+                                    # stateless: fresh scale-invariant tracker over the last 100 closed bars (live parity)
+                                    _kf = KalmanFilterTracker(mode="adaptive")
+                                    for _p in close_prices:
+                                        _, z_score = _kf.update(float(_p))
                                 if z_score < -2.0:
                                     sig_val = Signal.BUY
                                     reason = f"Kalman Z-Score {z_score:.2f} < -2.0 (Oversold)"
@@ -701,8 +738,8 @@ class V9ContinuumBacktester:
                         if sig_val != Signal.HOLD:
                             # XGBoost confirming filter (shared contextual feature builder)
                             feat = self.build_context_features(sym, row, history_records[sym], current_time, session, direction=sig_val.value)
-                            loss_prob = self.ml_engine.predict_loss_probability(feat)
-                            if loss_prob > self.ml_veto_threshold:
+                            loss_prob = self.ml_engine.predict_loss_probability(feat) if self.ml_enabled else None
+                            if self.ml_enabled and loss_prob > self.ml_veto_threshold:
                                 # Vetoed
                                 continue
 
@@ -808,6 +845,8 @@ class V9ContinuumBacktester:
 
         # Realize commissions and slippage/spread costs
         spread_pips = get_backtest_spread_pips(symbol, time.hour)
+        if self.use_real_spread and symbol in self._current_spread:
+            spread_pips = self._current_spread[symbol]
         dynamic_slippage = calculate_dynamic_slippage(atr_value, spec.category)
         total_pips = spread_pips + dynamic_slippage
         spread_usd, commission = self.get_costs(symbol, total_lots, total_pips, exit_price)

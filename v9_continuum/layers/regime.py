@@ -63,12 +63,24 @@ def fit_ou_process(prices: np.ndarray) -> Tuple[float, float, float]:
 class KalmanFilterTracker:
     """
     1D Kalman Filter to track underlying asset price state.
+
+    mode="fixed"    : original behaviour — q, r are ABSOLUTE price variances, so the z-score
+                      depends on the instrument's price units (FX never reaches |z|>2, gold/BTC
+                      almost always do). Kept as default for backtest parity.
+    mode="adaptive" : scale-invariant — r is the EWMA variance of innovations, q = r * q_ratio.
+                      z ~ N(0,1) in steady state, so |z|>2 flags a genuine 2-sigma innovation
+                      for every instrument alike.
     """
-    def __init__(self, q: float = 1e-4, r: float = 1e-2):
+    def __init__(self, q: float = 1e-4, r: float = 1e-2, mode: str = "fixed", ewma_span: int = 50, q_ratio: float = 0.05):
         self.q = q  # Process noise covariance
         self.r = r  # Measurement noise covariance
         self.x = None  # State estimate (smoothed price)
         self.p = 1.0   # State covariance
+        self.mode = mode
+        self.alpha = 2.0 / (ewma_span + 1.0)
+        self.q_ratio = q_ratio
+        self.r_adapt = None  # EWMA of squared innovations
+        self.n = 0
 
     def update(self, z: float) -> Tuple[float, float]:
         """
@@ -78,21 +90,38 @@ class KalmanFilterTracker:
         if self.x is None:
             self.x = z
             return self.x, 0.0
-            
+
+        if self.mode == "adaptive":
+            residual_pre = z - self.x
+            if self.r_adapt is None:
+                self.r_adapt = max(residual_pre * residual_pre, 1e-18)
+                self.p = self.r_adapt
+            r_eff = max(self.r_adapt, 1e-18)
+            q_eff = r_eff * self.q_ratio
+        else:
+            r_eff, q_eff = self.r, self.q
+
         # Predict step
         x_pred = self.x
-        p_pred = self.p + self.q
-        
+        p_pred = self.p + q_eff
+
         # Update step
         residual = z - x_pred
-        s = p_pred + self.r
+        s = p_pred + r_eff
         k = p_pred / s  # Kalman Gain
-        
+
         self.x = x_pred + k * residual
         self.p = (1 - k) * p_pred
-        
+        self.n += 1
+
         # Z-score computation
         z_score = residual / np.sqrt(s)
+
+        if self.mode == "adaptive":
+            # update innovation variance AFTER scoring (no same-bar leakage); warm-up guard
+            self.r_adapt = (1 - self.alpha) * self.r_adapt + self.alpha * residual * residual
+            if self.n < 20:
+                z_score = 0.0
         return self.x, float(z_score)
 
 

@@ -1,0 +1,29 @@
+
+==============================================================================
+ ELITE6 :: 36M :: ML veto 0.85
+==============================================================================
+ Trades 1410 | Win 926 | Loss 484 | WR 65.67%
+ Net PnL $+3,574.56 (+35.75%) | Annualised +35.77%/yr
+ Profit Factor 1.38 | Expectancy $+2.54/trade
+ Max DD $370.26 (2.83%) | Max loss streak 8
+ Sharpe 3.16 | Sortino 6.03 | Calmar 12.64 | Recovery 9.65 | PSR 100.0%
+ Trading days 260 (154W/106L) | Avg hold 10.2h | Avg DCA 0.10
+
+ Per symbol:
+  SYMBOL        N     WR%        NET$     PF   EXPECT$
+  AUDUSD       81   60.5%     -249.90   0.64     -3.09
+  BTCUSD      422   64.5%      892.87   1.37      2.12
+  NZDUSD       60   73.3%       29.37   1.10      0.49
+  US30        349   71.6%      363.07   1.19      1.04
+  USDJPY      211   57.8%      333.36   1.36      1.58
+  XAUUSD      287   65.9%    2,205.79   1.70      7.69
+
+ Per year:
+  2025  n=  510  WR  63.3%  Net $   +444.75  PF 1.15
+  2026  n=  900  WR  67.0%  Net $ +3,129.82  PF 1.48
+
+ Close reasons:
+  TRAILING_BE_EXIT       n=  708  Net $ +7,368.97  WR  99.7%  Avg $ +10.41
+  12H_ML_CUT             n=  421  Net $   +998.05  WR  43.7%  Avg $  +2.37
+  SOFT_ATR_STOP          n=  245  Net $ -7,176.43  WR   0.0%  Avg $ -29.29
+  TAKE_PROFIT            n=   36  Net $ +2,383.97  WR 100.0%  Avg $ +66.22
