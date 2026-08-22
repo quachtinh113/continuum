@@ -1,0 +1,48 @@
+{
+  "metrics": {
+    "initial_balance": 10000.0,
+    "final_balance": 13327.294748554807,
+    "total_profit_usd": 3327.2947485548066,
+    "profit_percent": 33.272947485548066,
+    "win_rate": 67.3757530120482,
+    "profit_factor": 1.08,
+    "gross_profit": 43667.65403124321,
+    "gross_loss": 40340.3592826885,
+    "max_drawdown_usd": 1409.9578917481758,
+    "max_drawdown_percent": 13.396072421547576,
+    "total_cycles": 5312,
+    "avg_holding_hours": 11.9,
+    "avg_dca_layers": 0.11,
+    "max_dca_reached": 2,
+    "reasons": {
+      "TRAILING_BE_EXIT": 3293,
+      "SOFT_ATR_STOP": 1466,
+      "24H_HARD_CUT": 421,
+      "TAKE_PROFIT": 132
+    },
+    "psr": 0.9744753868533829
+  },
+  "risk": {
+    "max_dd_usd": 1381.3450420982444,
+    "max_dd_pct": 13.150343069483764,
+    "sharpe": 1.1215152351483961,
+    "sortino": 1.8912899213917496,
+    "annual_return_pct": 11.088452617788397,
+    "calmar": 0.8432063375988935,
+    "recovery_factor": 2.408735433328516,
+    "max_loss_streak": 9,
+    "trading_days": 783,
+    "win_days": 410,
+    "loss_days": 373
+  },
+  "symbols": [
+    "AUDUSD",
+    "NZDUSD",
+    "USDJPY",
+    "XAUUSD",
+    "US30",
+    "BTCUSD"
+  ],
+  "veto": 0.85,
+  "years": 3.0006844626967832
+}
